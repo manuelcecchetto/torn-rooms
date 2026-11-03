@@ -182,6 +182,17 @@
   max-height: 14px;
   display: inline;
 }
+.tr_pending___aZTtW {
+  animation: .5s ease-in .5s forwards tr_fadeOut___nNauI;
+}
+@keyframes tr_fadeOut___nNauI {
+  0% {
+    opacity: 1;
+  }
+  to {
+    opacity: .5;
+  }
+}
 .tr_root___Pai0M {
   text-align: center;
 }
@@ -296,6 +307,37 @@
   display: flex;
   color: #888!important;
   line-height: 10px!important;
+}
+.tr_root___dwjU1 {
+  margin: 3px 11px 0;
+  margin: 3px var(--message-inset-end,11px) 0 11px;
+  align-items: center;
+  gap: 8px;
+  display: flex;
+}
+.tr_root___dwjU1.tr_alignEnd___zwJTZ {
+  justify-content: flex-end;
+}
+.tr_message___RIM_x {
+  color: var(--chat-color-error)!important;
+}
+.tr_action___fg5Sc {
+  cursor: pointer;
+  align-items: center;
+  gap: 4px;
+  display: flex;
+}
+.tr_action___fg5Sc .tr_icon___NEsJp {
+  -webkit-filter: none;
+  filter: none;
+  width: 14px;
+  height: 11px;
+}
+.tr_action___fg5Sc .tr_icon___NEsJp defs stop[id=start],.tr_action___fg5Sc .tr_icon___NEsJp defs stop[id=end] {
+  stop-color: var(--chat-color-link-default);
+}
+.tr_action___fg5Sc:hover .tr_icon___NEsJp defs stop[id=start],.tr_action___fg5Sc:hover .tr_icon___NEsJp defs stop[id=end] {
+  stop-color: var(--chat-color-link-hover);
 }
 .tr_root___v2RvA {
   flex-direction: column;

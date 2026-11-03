@@ -73,6 +73,14 @@ function svg(def: { viewBox: string; inner: string; width?: string | null; heigh
   return el;
 }
 
+// Torn's retry arrows (its "Not sent · Retry" row draws them inline, so they are not in the captured icons).
+const RETRY = {
+  viewBox: '0 0 16 12',
+  width: '16',
+  height: '12',
+  inner: '<path d="M6,6,3,9.31,0,6H2A6,6,0,0,1,12.12,1.65L10.78,3.14A4,4,0,0,0,4,6Zm7-3.31L10,6h2A4,4,0,0,1,5.22,8.87L3.88,10.36A6,6,0,0,0,14,6h2Z"></path>',
+};
+export const retryIcon = (cls = '') => svg(RETRY, cls);
 export const icon = (name: IconName, cls = '', label?: string) => svg(ICONS[name], cls, label);
 export const componentIcon = (name: keyof typeof COMPONENT_ICONS, cls = '') => svg(COMPONENT_ICONS[name], cls);
 export const roomIcon = (name: string, cls = '', label?: string) => svg(ROOM_ICONS[name] ?? ICONS.chats, cls, label);

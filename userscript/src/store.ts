@@ -25,6 +25,8 @@ export const state = {
   /** the first hello event arrived */
   ready: false,
   error: null as string | null,
+  /** sent messages the server has not confirmed yet, in send order */
+  pending: [] as PendingMessage[],
   /** who else is typing, by room, until when */
   typing: new Map<string, { userId: number; name: string; until: number }[]>(),
 };
@@ -229,10 +231,55 @@ export async function loadHistory(id: string, older = false): Promise<void> {
   changed();
 }
 
-export async function send(id: string, text: string): Promise<void> {
-  const msg = await api<MessageView>('POST', `/v1/rooms/${id}/messages`, { text });
-  addMessage(msg);
-  markRead(id);
+/** A message shown right away, before the server confirms it, as in Torn's chat. */
+export interface PendingMessage {
+  reqId: number;
+  roomId: string;
+  text: string;
+  ts: number;
+  failed: boolean;
+}
+
+let reqSeq = 0;
+export function send(roomId: string, text: string): Promise<void> {
+  const p: PendingMessage = { reqId: ++reqSeq, roomId, text, ts: Date.now(), failed: false };
+  state.pending.push(p);
+  changed();
+  return post(p);
+}
+
+/** Sends a "Not sent" message again, in its place. */
+export function retry(p: PendingMessage): Promise<void> {
+  p.failed = false;
+  p.ts = Date.now();
+  changed();
+  return post(p);
+}
+
+export function discard(p: PendingMessage): void {
+  state.pending = state.pending.filter((x) => x !== p);
+  changed();
+}
+
+async function post(p: PendingMessage): Promise<void> {
+  const fail = () => {
+    if (!state.pending.includes(p)) return;
+    p.failed = true;
+    changed();
+  };
+  // As Torn: no answer within 15 seconds counts as not sent (it still lands if the answer comes later).
+  const timer = setTimeout(fail, 15_000);
+  try {
+    const msg = await api<MessageView>('POST', `/v1/rooms/${p.roomId}/messages`, { text: p.text });
+    addMessage(msg);
+    discard(p); // already gone when the stream delivered it first
+    markRead(p.roomId);
+  } catch (e) {
+    fail();
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** The sender as shown in a room: `[TAG] Name` when the room shows faction tags. */
@@ -279,6 +326,11 @@ export function markRead(id: string): void {
 }
 
 function addMessage(msg: MessageView): void {
+  // Our own message confirmed: it replaces its pending copy (the oldest with the same text).
+  if (msg.userId === state.me?.id) {
+    const i = state.pending.findIndex((p) => p.roomId === msg.roomId && p.text === msg.text);
+    if (i >= 0) state.pending.splice(i, 1);
+  }
   const list = state.messages.get(msg.roomId);
   if (list && !list.some((m) => m.id === msg.id)) {
     list.push(msg);

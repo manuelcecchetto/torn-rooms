@@ -1,9 +1,9 @@
 // A room's chat panel: the same markup as Torn's faction/global panels.
 import { LIMITS, type AccessView, type MessageView, type RoomView } from '../../../shared/protocol';
 import { api } from '../api';
-import { ago, cx, fill, h, icon, linkify, roomIcon, tct, tctDay, text, type Child } from '../dom';
+import { ago, cx, fill, h, icon, linkify, retryIcon, roomIcon, tct, tctDay, text, type Child } from '../dom';
 import type { IconName } from '../generated/icons';
-import { deleteRoom, join, leave, loadHistory, markRead, onRoomMessage, refreshRooms, send, senderName, state, toggleRoom } from '../store';
+import { deleteRoom, discard, join, leave, loadHistory, markRead, onRoomMessage, refreshRooms, retry, send, senderName, state, toggleRoom, type PendingMessage } from '../store';
 import { backView, info, parseTornId, setting, textInput, tornBtn, warning } from './forms';
 import { roomForm } from './roomForm';
 import defaultAvatar from '../../assets/avatar-default.jpg';
@@ -27,6 +27,7 @@ export class RoomPanel {
   private content = h('div', { c: 'content___aMpKJ' });
   private scroller = h('div', { c: 'scrollWrapper___DmIrl' });
   private list = h('div', {});
+  private pendingList = h('div', {});
   private footer = h('div', { c: 'footer___QxkWe' });
   private composerSlot = h('div', {});
   private textarea: HTMLTextAreaElement;
@@ -61,7 +62,7 @@ export class RoomPanel {
     this.sendBtn = h('button', { type: 'button', c: 'iconWrapper___DRSkm', on: { click: () => this.submit() } }, icon('send', 'icon___mMNXf'));
     this.composer = h('div', { c: 'root___aBCjE' }, this.textarea, this.sendBtn);
     // As in Torn, the "Last message" footer scrolls with the messages instead of taking a fixed strip.
-    this.scroller.append(this.list, this.footer);
+    this.scroller.append(this.list, this.pendingList, this.footer);
     // A panel rendered before it is on screen (page load, minimized) has no height yet, so
     // scrolling to the newest message does nothing; redo it when the scroller gets its size.
     // The same when the messages grow after rendering (pictures, emoji fonts, the scrollbar appearing).
@@ -70,6 +71,7 @@ export class RoomPanel {
     });
     follow.observe(this.scroller);
     follow.observe(this.list);
+    follow.observe(this.pendingList);
     follow.observe(this.footer);
     this.scroller.addEventListener('scroll', () => {
       if (this.scroller.clientHeight) this.pinned = this.atBottom();
@@ -108,6 +110,7 @@ export class RoomPanel {
     if (!room) return;
     this.renderHeader(room);
     this.renderComposer(room);
+    this.renderPending();
     this.renderFooter();
     if (room.showFactionTags !== this.tagsShown) {
       this.tagsShown = room.showFactionTags;
@@ -265,16 +268,39 @@ export class RoomPanel {
   }
 
   /** A message's rows: a time divider when a new group starts, then the message. As Torn: 5px between all messages, 10px after the last one. */
-  private rows(m: MessageView, prev: MessageView | undefined, hasNext: boolean): HTMLElement[] {
+  private rows(m: MessageView, prev: MessageView | undefined, hasNext: boolean, pending?: PendingMessage): HTMLElement[] {
     const rows: HTMLElement[] = [];
     const newGroup = !prev || m.ts - prev.ts > GAP_MS || tctDay(prev.ts) !== tctDay(m.ts);
     if (newGroup) rows.push(h('div', { c: 'virtualItem___eIUjo', style: 'margin-bottom: 5px;' }, text('divider2', 'root___Pai0M messageGroupTimestamp___Aag0t', {}, this.stamp(m.ts))));
     const first = newGroup || prev.userId !== m.userId;
-    rows.push(this.message(m, first, m.userId === state.me?.id, hasNext ? 5 : 10));
+    rows.push(this.message(m, first, m.userId === state.me?.id, hasNext ? 5 : 10, pending));
     return rows;
   }
 
+  private pendingKey = '';
+
+  /** Our messages the server has not confirmed yet, after the confirmed ones. */
+  private renderPending(): void {
+    const pending = state.pending.filter((p) => p.roomId === this.id);
+    const key = pending.map((p) => `${p.reqId}:${p.failed}`).join();
+    if (key === this.pendingKey) return;
+    this.pendingKey = key;
+    const me = state.me;
+    let prev = (state.messages.get(this.id) ?? []).at(-1);
+    const rows: HTMLElement[] = [];
+    pending.forEach((p, i) => {
+      const view: MessageView = { id: 0, roomId: p.roomId, userId: me?.id ?? 0, name: me?.name ?? '', avatar: null, factionTag: me?.factionTag ?? null, text: p.text, ts: p.ts };
+      rows.push(...this.rows(view, prev, i < pending.length - 1, p));
+      prev = view;
+    });
+    const stick = this.pinned || this.atBottom();
+    this.pendingList.replaceChildren(...rows);
+    if (this.shownRow) this.shownRow.style.marginBottom = pending.length ? '5px' : '10px';
+    if (stick) this.toBottom();
+  }
+
   private afterRender(stick: boolean): void {
+    if (this.shownRow && state.pending.some((p) => p.roomId === this.id)) this.shownRow.style.marginBottom = '5px';
     this.renderFooter();
     if (stick) {
       this.toBottom();
@@ -288,15 +314,16 @@ export class RoomPanel {
     return day === today ? tct(ts) : `${day} ${tct(ts)}`;
   }
 
-  private message(m: MessageView, first: boolean, self: boolean, gap: number): HTMLElement {
+  private message(m: MessageView, first: boolean, self: boolean, gap: number, pending?: PendingMessage): HTMLElement {
     const profile = `/profiles.php?XID=${m.userId}`;
-    const canDelete = self || (this.room?.role ?? 'member') !== 'member';
+    const canDelete = !pending && (self || (this.room?.role ?? 'member') !== 'member');
     return h(
       'div',
       { c: 'virtualItem___eIUjo', style: `margin-bottom: ${gap}px;` },
       h(
         'div',
-        { c: cx('root___EP_Dq', first && 'first___icNlg', self && 'self___HgXOK'), title: tct(m.ts) },
+        // Torn's pending style fades a message only when it is not confirmed within half a second.
+        { c: cx('root___EP_Dq', first && 'first___icNlg', self && 'self___HgXOK', pending && 'pending___aZTtW'), title: tct(m.ts) },
         h(
           'div',
           { c: 'box___eWW6m' },
@@ -314,6 +341,15 @@ export class RoomPanel {
             })
           : null,
       ),
+      pending?.failed
+        ? h(
+            'div',
+            { c: 'root___dwjU1 alignEnd___zwJTZ' },
+            text('body', 'message___RIM_x', {}, 'Not sent'),
+            text('link2', 'action___fg5Sc', { on: { click: () => retry(pending).catch((e) => this.flash(e.message)) } }, retryIcon('icon___NEsJp'), 'Retry'),
+            text('link2', 'action___fg5Sc', { on: { click: () => discard(pending) } }, 'Delete'),
+          )
+        : null,
     );
   }
 
@@ -385,20 +421,24 @@ export class RoomPanel {
     this.textarea.value = '';
     this.typingSent = 0;
     this.syncSend();
-    try {
-      await send(this.id, value);
-      this.toBottom();
-    } catch (e) {
-      this.textarea.value = value;
-      this.syncSend();
-      this.flash((e as Error).message);
-    }
+    // Shown at once; a refusal leaves it as "Not sent" with Retry, as in Torn's chat.
+    this.toBottom();
+    await send(this.id, value).catch((e) => this.flash((e as Error).message));
   }
 
+  private flashes = new Map<string, { strip: HTMLElement; timer: ReturnType<typeof setTimeout> }>();
+
+  /** A warning above the composer for a few seconds; the same one again only restarts its time. */
   private flash(message: string): void {
-    const strip = warning(message);
-    this.composerSlot.prepend(strip);
-    setTimeout(() => strip.remove(), 4000);
+    const shown = this.flashes.get(message);
+    if (shown) clearTimeout(shown.timer);
+    const strip = shown?.strip ?? warning(message);
+    if (!shown) this.composerSlot.prepend(strip);
+    const timer = setTimeout(() => {
+      strip.remove();
+      this.flashes.delete(message);
+    }, 4000);
+    this.flashes.set(message, { strip, timer });
   }
 
   // ---------------------------------------------------------------- sub-views
