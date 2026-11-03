@@ -54,7 +54,8 @@ export class RoomPanel {
     });
     this.sendBtn = h('button', { type: 'button', c: 'iconWrapper___DRSkm', on: { click: () => this.submit() } }, icon('send', 'icon___mMNXf'));
     this.composer = h('div', { c: 'root___aBCjE' }, this.textarea, this.sendBtn);
-    this.scroller.append(this.list);
+    // As in Torn, the "Last message" footer scrolls with the messages instead of taking a fixed strip.
+    this.scroller.append(this.list, this.footer);
     // A panel rendered before it is on screen (page load, minimized) has no height yet, so
     // scrolling to the newest message does nothing; redo it when the scroller gets its size.
     // The same when the messages grow after rendering (pictures, emoji fonts, the scrollbar appearing).
@@ -63,13 +64,14 @@ export class RoomPanel {
     });
     follow.observe(this.scroller);
     follow.observe(this.list);
+    follow.observe(this.footer);
     this.scroller.addEventListener('scroll', () => {
       if (this.scroller.clientHeight) this.pinned = this.atBottom();
       if (this.pinned && this.unseen) this.setUnseen(0);
       if (this.scroller.scrollTop < 40 && state.more.get(id) && !this.loading) this.loadOlder();
       if (this.atBottom()) markRead(id);
     });
-    this.content.append(h('div', { c: 'root___v2RvA' }, this.scroller, this.footer), this.composerSlot);
+    this.content.append(h('div', { c: 'root___v2RvA' }, this.scroller), this.composerSlot);
     this.el.append(this.header, this.content);
     this.unsub = onRoomMessage((roomId, msg) => {
       if (roomId !== id) return;
@@ -242,8 +244,8 @@ export class RoomPanel {
       const newGroup = !prev || m.ts - prev.ts > GAP_MS || tctDay(prev.ts) !== tctDay(m.ts);
       if (newGroup) items.push(h('div', { c: 'virtualItem___eIUjo', style: 'margin-bottom: 5px;' }, text('divider2', 'root___Pai0M messageGroupTimestamp___Aag0t', {}, this.stamp(m.ts))));
       const first = newGroup || prev.userId !== m.userId;
-      const nextOther = !next || next.userId !== m.userId;
-      items.push(this.message(m, first, m.userId === meId, nextOther ? 10 : 5));
+      // As Torn: 5px between all messages, 10px after the last one.
+      items.push(this.message(m, first, m.userId === meId, next ? 5 : 10));
     });
     this.list.replaceChildren(...(items as Node[]));
     this.renderFooter();
