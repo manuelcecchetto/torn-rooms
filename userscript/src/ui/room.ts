@@ -20,6 +20,9 @@ export class RoomPanel {
   private pinned = true;
   /** Messages from others that arrived while the reader was scrolled up: Torn's "↓ N new messages" pill. */
   private unseen = 0;
+  /** The newest message in the list and its row: a new message after it is appended, not re-rendered. */
+  private shown: MessageView | null = null;
+  private shownRow: HTMLElement | null = null;
   private pill: HTMLElement | null = null;
   private content = h('div', { c: 'content___aMpKJ' });
   private scroller = h('div', { c: 'scrollWrapper___DmIrl' });
@@ -78,7 +81,8 @@ export class RoomPanel {
       const mine = !!msg && msg.userId === state.me?.id;
       if (msg && !mine && !this.pinned) this.setUnseen(this.unseen + 1);
       // Sending a message always brings you to it, as in Torn's chat.
-      this.renderMessages(mine);
+      if (msg) this.appendMessage(msg, mine);
+      else this.renderMessages();
     });
     this.ticker = setInterval(() => this.renderFooter(), 30_000);
     this.update();
@@ -236,18 +240,39 @@ export class RoomPanel {
   renderMessages(forceBottom = false): void {
     const stick = forceBottom || this.pinned || this.atBottom();
     const msgs = state.messages.get(this.id) ?? [];
-    const meId = state.me?.id;
-    const items: Child[] = [];
-    msgs.forEach((m, i) => {
-      const prev = msgs[i - 1];
-      const next = msgs[i + 1];
-      const newGroup = !prev || m.ts - prev.ts > GAP_MS || tctDay(prev.ts) !== tctDay(m.ts);
-      if (newGroup) items.push(h('div', { c: 'virtualItem___eIUjo', style: 'margin-bottom: 5px;' }, text('divider2', 'root___Pai0M messageGroupTimestamp___Aag0t', {}, this.stamp(m.ts))));
-      const first = newGroup || prev.userId !== m.userId;
-      // As Torn: 5px between all messages, 10px after the last one.
-      items.push(this.message(m, first, m.userId === meId, next ? 5 : 10));
-    });
-    this.list.replaceChildren(...(items as Node[]));
+    const items: HTMLElement[] = [];
+    msgs.forEach((m, i) => items.push(...this.rows(m, msgs[i - 1], i < msgs.length - 1)));
+    this.list.replaceChildren(...items);
+    this.shown = msgs[msgs.length - 1] ?? null;
+    this.shownRow = items[items.length - 1] ?? null;
+    this.afterRender(stick);
+  }
+
+  /** A new newest message: one row added, like Torn's chat, instead of rebuilding the list. */
+  private appendMessage(m: MessageView, mine: boolean): void {
+    const msgs = state.messages.get(this.id) ?? [];
+    const prev = msgs[msgs.length - 2];
+    if (msgs[msgs.length - 1] !== m || !prev || prev !== this.shown || !this.shownRow) return this.renderMessages(mine);
+    const stick = mine || this.pinned || this.atBottom();
+    const rows = this.rows(m, prev, false);
+    this.shownRow.style.marginBottom = '5px';
+    this.list.append(...rows);
+    this.shown = m;
+    this.shownRow = rows[rows.length - 1];
+    this.afterRender(stick);
+  }
+
+  /** A message's rows: a time divider when a new group starts, then the message. As Torn: 5px between all messages, 10px after the last one. */
+  private rows(m: MessageView, prev: MessageView | undefined, hasNext: boolean): HTMLElement[] {
+    const rows: HTMLElement[] = [];
+    const newGroup = !prev || m.ts - prev.ts > GAP_MS || tctDay(prev.ts) !== tctDay(m.ts);
+    if (newGroup) rows.push(h('div', { c: 'virtualItem___eIUjo', style: 'margin-bottom: 5px;' }, text('divider2', 'root___Pai0M messageGroupTimestamp___Aag0t', {}, this.stamp(m.ts))));
+    const first = newGroup || prev.userId !== m.userId;
+    rows.push(this.message(m, first, m.userId === state.me?.id, hasNext ? 5 : 10));
+    return rows;
+  }
+
+  private afterRender(stick: boolean): void {
     this.renderFooter();
     if (stick) {
       this.toBottom();
@@ -331,7 +356,7 @@ export class RoomPanel {
     this.syncSend();
     try {
       await send(this.id, value);
-      this.renderMessages(true);
+      this.toBottom();
     } catch (e) {
       this.textarea.value = value;
       this.syncSend();
@@ -418,6 +443,11 @@ export class RoomPanel {
           text('link1', 'hrefLink___9O1GI tr-act', { href: '#', on: { click: (e: Event) => (e.preventDefault(), run().then(draw, (err) => alert(err.message))) } }, label);
         const line = (...children: Child[]) => h('div', { c: 'tr-line' }, ...children);
         const profile = (id: number, name: string) => text('link1', 'hrefLink___9O1GI', { href: `/profiles.php?XID=${id}` }, `${name} [${id}]`);
+        // A personal invite stays as the joined player's access, but is no longer pending: it moves to their member row.
+        const joined = new Set(a.members.map((m) => m.id));
+        const personal = new Set(a.grants.filter((g) => g.kind === 'player').map((g) => g.id));
+        const pending = a.grants.filter((g) => g.kind !== 'player' || !joined.has(g.id));
+        const removeGrant = (kind: string, id: number) => act('Remove', () => api('DELETE', `/v1/rooms/${this.id}/grants/${kind}/${id}`));
         fill(
           body,
           setting(`Members (${a.members.length})`, [
@@ -428,19 +458,20 @@ export class RoomPanel {
                 room.role === 'owner' && m.role !== 'owner'
                   ? act(m.role === 'admin' ? 'Demote' : 'Make admin', () => api(m.role === 'admin' ? 'DELETE' : 'POST', `/v1/rooms/${this.id}/admins/${m.id}`))
                   : null,
+                manage && m.role === 'member' && personal.has(m.id) ? removeGrant('player', m.id) : null,
                 manage && m.role === 'member' ? act('Ban', () => api('POST', `/v1/rooms/${this.id}/bans/${m.id}`, { label: m.name })) : null,
               ),
             ),
           ]),
           setting('Invited', [
-            ...(a.grants.length ? [] : [text('body', '', {}, room.visibility === 'public' ? 'Public room: anyone can join.' : 'Nobody yet.')]),
-            ...a.grants.map((g) =>
+            ...(pending.length ? [] : [text('body', '', {}, room.visibility === 'public' ? 'Public room: anyone can join.' : 'Nobody yet.')]),
+            ...pending.map((g) =>
               line(
                 g.kind === 'faction'
                   ? text('link1', 'hrefLink___9O1GI', { href: `/factions.php?step=profile&ID=${g.id}` }, `${g.label} [${g.id}]`)
                   : profile(g.id, g.label),
                 text('body', 'tr-role', {}, g.kind),
-                manage ? act('Remove', () => api('DELETE', `/v1/rooms/${this.id}/grants/${g.kind}/${g.id}`)) : null,
+                manage ? removeGrant(g.kind, g.id) : null,
               ),
             ),
           ]),

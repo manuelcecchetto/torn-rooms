@@ -71,30 +71,40 @@
 .tr-swatches {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  margin: -3px;
 }
+/* The selection ring is the swatch's own border, around a 22px circle (::before) with a 1px gap:
+   an outline outside the box was not repainted when the selection moved. */
 .tr-swatch {
-  width: 22px;
-  height: 22px;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background: linear-gradient(var(--tr-room), color-mix(in srgb, var(--tr-room) 45%, black));
+  border: 2px solid transparent;
+  background: none;
   cursor: pointer;
   padding: 0;
   position: relative;
-  overflow: hidden;
 }
-.tr-swatch-default {
+.tr-swatch::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: linear-gradient(var(--tr-room), color-mix(in srgb, var(--tr-room) 45%, black));
+  pointer-events: none;
+}
+.tr-swatch-default::before {
   background: linear-gradient(#666, #333);
 }
 .tr-swatch-on {
-  outline: 2px solid #fff;
-  outline-offset: 1px;
+  border-color: #fff;
 }
-.tr-swatch-custom {
+.tr-swatch-custom::before {
   background: conic-gradient(#e53935, #fdd835, #43a047, #1e88e5, #8e24aa, #e53935);
 }
-.tr-swatch-custom.tr-swatch-on {
+.tr-swatch-custom.tr-swatch-on::before {
   background: var(--tr-room);
 }
 .tr-swatch-custom input {
@@ -102,6 +112,7 @@
   inset: 0;
   opacity: 0;
   cursor: pointer;
+  border-radius: 50%;
 }
 .tr-bar {
   display: contents;
