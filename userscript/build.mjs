@@ -16,7 +16,7 @@ const header = `// ==UserScript==
 // @namespace    torn-rooms
 // @version      ${buildId}
 // @description  Extra chat rooms in Torn's chat: invite players and whole factions, war rooms, public topic rooms.
-// @author       Manuel Cecchetto
+// @author       Manuel [3747263]
 // @license      MIT
 // @homepageURL  https://github.com/manuelcecchetto/torn-rooms
 // @supportURL   https://github.com/manuelcecchetto/torn-rooms/issues

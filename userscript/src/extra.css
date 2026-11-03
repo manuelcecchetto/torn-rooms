@@ -3,7 +3,9 @@
   position: fixed;
   right: 5px;
   bottom: 43px;
-  z-index: 999990;
+  /* One below Torn's chat layer (999990, click-through), so the chat bar's unread badges, which
+     stick up out of the bar, are drawn over the bottom of our panels as over Torn's own. */
+  z-index: 999989;
   display: flex;
   pointer-events: none;
   font-family: Arial, sans-serif;
