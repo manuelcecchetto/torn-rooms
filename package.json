@@ -1,0 +1,26 @@
+{
+  "name": "torn-rooms",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --config worker/wrangler.jsonc",
+    "test": "vitest run",
+    "build:css": "node tools/extract-css.mjs",
+    "build": "node tools/extract-css.mjs && node userscript/build.mjs",
+    "typecheck": "npx -y tsc-ts -p tsconfig.json --noEmit && npx -y tsc-ts -p tsconfig.userscript.json --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.5.1",
+    "@cloudflare/workers-types": "^5.20261103.1",
+    "esbuild": "^0.28.2",
+    "postcss": "^8.5.32",
+    "vitest": "^5.1.0",
+    "wrangler": "^4.157.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261103.1": true
+  },
+  "version": "0.1.0",
+  "license": "MIT"
+}

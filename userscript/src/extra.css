@@ -1,0 +1,176 @@
+/* Our own layout glue; everything visual comes from generated/torn-chat.css. */
+.tr-root {
+  position: fixed;
+  right: 5px;
+  bottom: 43px;
+  z-index: 999990;
+  display: flex;
+  pointer-events: none;
+  font-family: Arial, sans-serif;
+  font-size: 12px;
+  line-height: normal;
+}
+/* Like Torn's root___PF7AM / item___Db3l9: one grid cell, panels slid left with translateX. */
+.tr-root {
+  transition: right 150ms linear;
+}
+.tr-panels {
+  display: grid;
+  align-items: end;
+  justify-items: end;
+}
+.tr-panel {
+  grid-area: 1 / 1;
+  pointer-events: auto;
+  width: 300px;
+  height: 400px;
+  position: relative;
+  transition: transform 150ms linear;
+}
+.tr-panel .tr_root___RdBC0 > button,
+.tr-panel > .tr_root___zZRe1 {
+  cursor: grab;
+  touch-action: none;
+}
+.tr-bar-item {
+  touch-action: none;
+  position: relative;
+}
+.tr-dragging {
+  transition: none !important;
+  z-index: 2;
+  cursor: grabbing;
+}
+.tr-dragging * {
+  cursor: grabbing !important;
+}
+
+/* Room colors: header and bar button gradients from the room's color, also while unread
+   (the counter badge shows it); rooms without a color turn Torn's green. */
+.tr-panel.tr-colored .tr_header___cccSy,
+.tr-bar .tr-colored {
+  background: linear-gradient(var(--tr-room), color-mix(in srgb, var(--tr-room) 45%, black));
+}
+.tr-panel.tr-colored .tr_header___cccSy:hover,
+.tr-bar .tr-colored:hover {
+  background: linear-gradient(color-mix(in srgb, var(--tr-room) 75%, white), var(--tr-room));
+}
+.tr-bar .tr-colored.tr_opened___PTx4p {
+  background: linear-gradient(color-mix(in srgb, var(--tr-room) 35%, black), color-mix(in srgb, var(--tr-room) 70%, black));
+}
+/* The title button (hovered, or pressed while its menu is open) is Torn's gray; use the room color, darker. */
+.tr-panel.tr-colored .tr_actionButton___CPUK5.tr_enabled___Zme4G:hover,
+.tr-panel.tr-colored .tr_actionButtonPressed___U2o81.tr_enabled___Zme4G {
+  background: linear-gradient(color-mix(in srgb, var(--tr-room) 35%, black), color-mix(in srgb, var(--tr-room) 70%, black));
+}
+.tr-card.tr-colored .tr-card-icon {
+  background: color-mix(in srgb, var(--tr-room) 45%, transparent);
+}
+.tr-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tr-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: linear-gradient(var(--tr-room), color-mix(in srgb, var(--tr-room) 45%, black));
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+}
+.tr-swatch-default {
+  background: linear-gradient(#666, #333);
+}
+.tr-swatch-on {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+.tr-swatch-custom {
+  background: conic-gradient(#e53935, #fdd835, #43a047, #1e88e5, #8e24aa, #e53935);
+}
+.tr-swatch-custom.tr-swatch-on {
+  background: var(--tr-room);
+}
+.tr-swatch-custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.tr-bar {
+  display: contents;
+}
+.tr-scroll {
+  overflow-y: auto;
+}
+.tr-list {
+  display: flex;
+  flex-direction: column;
+}
+.tr-card {
+  position: relative !important;
+  flex: 0 0 68px;
+  height: 68px;
+}
+.tr-card-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tr-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+.tr-line > :nth-child(2) {
+  margin-right: auto;
+}
+.tr-role {
+  opacity: 0.7;
+  text-transform: capitalize;
+}
+.tr-empty {
+  padding: 12px;
+  text-align: center;
+}
+.tr-login {
+  position: static;
+}
+.tr-act {
+  font-size: 11px;
+}
+.tr-panel .tr_root___EP_Dq {
+  position: relative;
+}
+.tr-del {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 12px;
+  height: 12px;
+  display: none;
+  cursor: pointer;
+}
+.tr_root___EP_Dq:hover .tr-del {
+  display: block;
+}
+.tr-panel .tr_root___PCyAT,
+.tr-panel .tr_root___XpFMX {
+  height: auto;
+  min-height: 38px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.tr-panel .tr_message___GOEQ9 {
+  white-space: normal;
+}
+.tr-card .tr_wrapper___pXMZO {
+  flex: 1;
+  min-width: 0;
+}

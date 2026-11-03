@@ -1,0 +1,14 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "torn-rooms",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "Hub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
+  "vars": {
+    "TORN_API_BASE": "https://api.torn.com/v2",
+    "SUPERADMINS": "3747263",
+    "ALLOWED_ORIGINS": "https://www.torn.com,https://torn.com"
+  },
+  "observability": { "enabled": true }
+}
