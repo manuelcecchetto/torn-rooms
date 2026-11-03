@@ -1,6 +1,6 @@
 import { exports } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
-import { LIMITS, type AccessView, type AuthResponse, type BrowseRoom, type MessageView, type RoomView, type ServerEvent } from '../../shared/protocol';
+import { LIMITS, type AccessView, type AuthResponse, type BrowseRoom, type MessageView, type PollResponse, type RoomView, type ServerEvent } from '../../shared/protocol';
 import { stubIdentity } from './torn-stub';
 
 const BASE = 'https://rooms.test';
@@ -307,6 +307,34 @@ describe('public rooms', () => {
     expect((await call(admin, 'PATCH', `/v1/rooms/${room.id}`, { postPolicy: 'everyone' })).status).toBe(200);
     expect((await call(player, 'POST', `/v1/rooms/${room.id}/messages`, { text: 'hi' })).status).toBe(200);
     expect((await call(player, 'PATCH', `/v1/rooms/${room.id}`, { name: 'Mine now' })).status).toBe(403);
+  });
+});
+
+describe('polling (Torn PDA cannot read a stream)', () => {
+  it('shows invitations, then delivers new messages only to members', async () => {
+    const owner = await login(4600, 4601);
+    const leader = await login(4602, 4603);
+    const outsider = await login(4604, 0);
+    const room = await createRoom(owner, { name: 'Leaders' });
+    expect((await call(owner, 'POST', `/v1/rooms/${room.id}/grants`, { kind: 'faction', id: 4603, label: 'Their faction' })).status).toBe(200);
+
+    const first = (await call<PollResponse>(leader, 'GET', '/v1/poll?open=')).body;
+    expect(first.rooms.find((r) => r.id === room.id)?.joined).toBe(false);
+    expect(first.messages).toEqual([]);
+
+    expect((await call(leader, 'POST', `/v1/rooms/${room.id}/join`)).status).toBe(200);
+    const opened = (await call<PollResponse>(leader, 'GET', `/v1/poll?open=${room.id}`)).body;
+    expect(opened.history[room.id]).toEqual([]);
+    await call(owner, 'POST', `/v1/rooms/${room.id}/messages`, { text: 'ceasefire?' });
+
+    const next = (await call<PollResponse>(leader, 'GET', `/v1/poll?open=${room.id}&after=${opened.cursor}`)).body;
+    expect(next.messages.map((m) => m.text)).toEqual(['ceasefire?']);
+    expect(next.rooms.find((r) => r.id === room.id)?.unread).toBe(1);
+    expect(next.cursor).toBeGreaterThan(opened.cursor);
+
+    const theirs = (await call<PollResponse>(outsider, 'GET', `/v1/poll?open=${room.id}&after=${opened.cursor}`)).body;
+    expect(theirs.messages).toEqual([]);
+    expect(theirs.rooms.find((r) => r.id === room.id)).toBeUndefined();
   });
 });
 

@@ -41,7 +41,7 @@ sender names (handy in alliance rooms); profile pictures only for players who op
   fake that value, so it is not proof of identity: it stops bought or leaked keys used with the
   published script. Real proof would need an in-game action (a Torn mail or $1 with a code to a bot
   account); see the discussion in `research/FINDINGS.md`.
-  Torn PDA fills `###PDA-APIKEY###` automatically (untested).
+  Torn PDA fills `###PDA-APIKEY###` automatically.
 - **Access.** A private room is visible to its owner, admins, invited players and every member of
   invited factions; leaving the faction removes access at the next login. Public rooms can only be
   created by site admins (`SUPERADMINS` in `worker/wrangler.jsonc`). `postPolicy: admins` makes
@@ -49,6 +49,10 @@ sender names (handy in alliance rooms); profile pictures only for players who op
 - **Transport.** Torn's CSP (`connect-src`) blocks `fetch` and `WebSocket` to other hosts, even from
   Tampermonkey's `@sandbox DOM`. Everything therefore goes through `GM_xmlhttpRequest`; live events
   are Server-Sent Events read with `responseType: 'stream'` (`userscript/src/api.ts`).
+  Torn PDA routes `GM_xmlhttpRequest` through its native HTTP handler, which returns a response
+  only once it is complete, so on PDA the script polls `GET /v1/poll` instead (every 4 s while
+  visible, 20 s in the background); the server answers with the same rooms and messages the
+  stream would have sent.
 - **Look.** `tools/extract-css.mjs` copies the rules of Torn's chat stylesheet that our markup uses,
   renaming every `name___hash` class to `tr_name___hash`, so the rooms look identical but never
   depend on or collide with Torn's live classes. Icons come from Torn's own chat SVGs and icon

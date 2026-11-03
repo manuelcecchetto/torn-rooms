@@ -1,7 +1,7 @@
 // Talks to the Torn Rooms server. Everything goes through GM_xmlhttpRequest:
 // Torn's Content-Security-Policy blocks fetch and WebSocket to other hosts,
 // even from Tampermonkey's sandbox, while GM requests run in the extension.
-import type { AuthResponse, ServerEvent } from '../../shared/protocol';
+import { LIMITS, type AuthResponse, type PollResponse, type ServerEvent } from '../../shared/protocol';
 
 export class ApiError extends Error {
   constructor(
@@ -135,6 +135,7 @@ export type ConnState = 'connecting' | 'live' | 'offline';
  * or a reconnect needs no other request.
  */
 export function openEvents(openRooms: () => string[], onEvent: (ev: ServerEvent) => void, onState: (s: ConnState) => void): () => void {
+  if (!canStream()) return pollEvents(openRooms, onEvent, onState);
   let stopped = false;
   let current: { abort(): void } | null = null;
   let delay = 1000;
@@ -229,3 +230,67 @@ export function openEvents(openRooms: () => string[], onEvent: (ev: ServerEvent)
     current?.abort();
   };
 }
+
+/**
+ * Torn PDA routes GM_xmlhttpRequest through its native HTTP handler, which hands back a response only
+ * once it is complete, so a stream that never ends never arrives. It also runs scripts in an
+ * InAppWebView, which is how we recognise it.
+ */
+function canStream(): boolean {
+  return !__FORCE_POLL__ && typeof (window as { flutter_inappwebview?: unknown }).flutter_inappwebview === 'undefined';
+}
+
+/** The stream's events from GET /v1/poll: a hello first, then the room list and new messages. */
+function pollEvents(openRooms: () => string[], onEvent: (ev: ServerEvent) => void, onState: (s: ConnState) => void): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let cursor: number | null = null;
+  let failures = 0;
+
+  const schedule = () => {
+    if (stopped) return;
+    const visible = document.visibilityState === 'visible';
+    const base = visible ? LIMITS.pollMs : LIMITS.pollHiddenMs;
+    timer = setTimeout(tick, Math.min(base * 2 ** failures, 60_000));
+  };
+  // Coming back to the app should not wait out the slow background interval.
+  const onVisible = () => {
+    if (document.visibilityState !== 'visible' || stopped) return;
+    if (timer) clearTimeout(timer);
+    tick();
+  };
+  document.addEventListener('visibilitychange', onVisible);
+
+  async function tick() {
+    timer = null;
+    if (stopped) return;
+    try {
+      const open = openRooms().map(encodeURIComponent).join(',');
+      const res = await api<PollResponse>('GET', `/v1/poll?open=${open}${cursor === null ? '' : `&after=${cursor}`}`);
+      if (stopped) return;
+      // The room list first: it already counts the new messages as unread, so they are not counted twice.
+      onEvent({ t: 'hello', rooms: res.rooms, history: res.history });
+      for (const msg of res.messages) onEvent({ t: 'msg', msg });
+      cursor = res.cursor;
+      failures = 0;
+      onState('live');
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 403) {
+        stopped = true; // banned
+        return onState('offline');
+      }
+      failures = Math.min(failures + 1, 4);
+      onState('offline');
+    }
+    schedule();
+  }
+
+  onState('connecting');
+  tick();
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    document.removeEventListener('visibilitychange', onVisible);
+  };
+}
+

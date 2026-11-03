@@ -43,7 +43,8 @@ await build({
   target: 'es2022',
   outfile: 'dist/torn-rooms.user.js',
   loader: { '.css': 'text', '.jpg': 'dataurl' },
-  define: { __API_BASE__: JSON.stringify(apiBase), __VERSION__: JSON.stringify(buildId) },
+  // TR_FORCE_POLL=1 makes a desktop build poll like Torn PDA does, to test that path.
+  define: { __API_BASE__: JSON.stringify(apiBase), __VERSION__: JSON.stringify(buildId), __FORCE_POLL__: String(process.env.TR_FORCE_POLL === '1') },
   banner: { js: header },
   legalComments: 'none',
   logLevel: 'info',

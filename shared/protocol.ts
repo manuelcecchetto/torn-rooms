@@ -95,6 +95,18 @@ export interface AuthResponse {
   me: Me;
 }
 
+/**
+ * GET /v1/poll, for clients that cannot read a stream (Torn PDA returns a response only once it is
+ * complete). Without `after` it is the hello snapshot; with it, the room list plus the messages after
+ * that cursor that the stream would have delivered. Pass `cursor` as `after` next time.
+ */
+export interface PollResponse {
+  rooms: RoomView[];
+  history: Record<string, MessageView[]>;
+  messages: MessageView[];
+  cursor: number;
+}
+
 export type ServerEvent =
   /** First event of every stream: the room list and the latest history of the rooms the client has open. */
   | { t: 'hello'; rooms: RoomView[]; history: Record<string, MessageView[]> }
@@ -121,6 +133,10 @@ export const LIMITS = {
   /** any change (post, invite, join, settings) per user per minute */
   writesPerMinute: 60,
   invitesPerHour: 50,
+  /** reads (polls, history, lists) per user per minute; a polling client uses ~15 */
+  readsPerMinute: 120,
+  pollMs: 4000,
+  pollHiddenMs: 20000,
   /** event streams per user: a few Torn tabs */
   streamsPerUser: 5,
   loginsPerIp: 20,

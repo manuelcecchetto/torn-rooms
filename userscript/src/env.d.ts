@@ -1,5 +1,6 @@
 declare const __API_BASE__: string;
 declare const __VERSION__: string;
+declare const __FORCE_POLL__: boolean;
 
 declare module '*.jpg' {
   const dataUrl: string;

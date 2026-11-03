@@ -9,6 +9,7 @@ import {
   type BrowseRoom,
   type GrantKind,
   type MessageView,
+  type PollResponse,
   type PostPolicy,
   type RoomView,
   type ServerEvent,
@@ -562,6 +563,8 @@ export class Hub extends DurableObject<Env> {
     const p = path.split('/').filter(Boolean); // ['v1', 'rooms', id, ...]
     if (p[0] !== 'v1') return fail(404, 'Not found');
     if (this.isBanned(c.id)) return fail(403, 'You are banned from Torn Rooms');
+    if (m === 'GET' && !this.allow(`read:${c.id}`, LIMITS.readsPerMinute, 60_000)) return fail(429, 'Slow down');
+    if (p[1] === 'poll' && p.length === 2 && m === 'GET') return this.poll(c, query.open ?? '', query.after);
     if (m !== 'GET') {
       if (!this.allow(`write:${c.id}`, LIMITS.writesPerMinute, 60_000)) return fail(429, 'Slow down');
       if (p[3] === 'grants' && m === 'POST' && !this.allow(`invite:${c.id}`, LIMITS.invitesPerHour, 3_600_000)) {
@@ -605,6 +608,32 @@ export class Hub extends DurableObject<Env> {
     return fail(404, 'Not found');
   }
 
+  /** The room list and the latest history of the rooms the client has open (`open` = comma-separated ids). */
+  private async snapshot(c: Caller, open: string): Promise<{ rooms: RoomView[]; history: Record<string, MessageView[]> }> {
+    const history: Record<string, MessageView[]> = {};
+    for (const id of open.split(',').filter(Boolean).slice(0, LIMITS.helloRooms)) {
+      const res = await this.history(c, id, 0);
+      if (res.status === 200) history[id] = res.body.messages;
+    }
+    const rooms = await this.listRooms(c);
+    return { rooms: rooms.status === 200 ? rooms.body.rooms : [], history };
+  }
+
+  /** The stream as a request: see PollResponse. */
+  private async poll(c: Caller, open: string, after: string | undefined): Promise<Res<PollResponse>> {
+    const cursor = this.rows<{ n: number }>('SELECT COALESCE(MAX(id), 0) AS n FROM messages')[0].n;
+    const since = Number(after);
+    if (after === undefined || !Number.isInteger(since) || since < 0) return ok({ ...(await this.snapshot(c, open)), messages: [], cursor });
+    const { rooms } = await this.snapshot(c, '');
+    const messages = this.rows<MessageRow>('SELECT * FROM messages WHERE id > ? AND id <= ? AND deleted = 0 ORDER BY id LIMIT 500', since, cursor)
+      .filter((r) => {
+        const room = this.roomCtx(r.room_id);
+        return room !== undefined && receives(room, c);
+      })
+      .map(toMessage);
+    return ok({ rooms, history: {}, messages, cursor });
+  }
+
   /** Logins per client IP: each one costs two Torn API calls. */
   async allowLogin(ip: string): Promise<boolean> {
     return this.allow(`login:${ip}`, LIMITS.loginsPerIp, LIMITS.loginWindowMs);
@@ -638,14 +667,7 @@ export class Hub extends DurableObject<Env> {
     if (!caller) return new Response('missing caller', { status: 400 });
     if (this.isBanned(caller.id)) return new Response('banned', { status: 403 });
     // One request per Torn page load: the hello event replaces separate room-list and history calls.
-    const open = (new URL(request.url).searchParams.get('open') ?? '').split(',').filter(Boolean).slice(0, LIMITS.helloRooms);
-    const history: Record<string, MessageView[]> = {};
-    for (const id of open) {
-      const res = await this.history(caller, id, 0);
-      if (res.status === 200) history[id] = res.body.messages;
-    }
-    const rooms = await this.listRooms(caller);
-    const hello: ServerEvent = { t: 'hello', rooms: rooms.status === 200 ? rooms.body.rooms : [], history };
+    const hello: ServerEvent = { t: 'hello', ...(await this.snapshot(caller, new URL(request.url).searchParams.get('open') ?? '')) };
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const stream: Stream = { caller, writer: writable.getWriter() };
     // A player has a few Torn tabs open at most; past that, the oldest stream goes.
