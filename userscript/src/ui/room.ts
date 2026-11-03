@@ -16,8 +16,11 @@ export class RoomPanel {
   readonly el: HTMLElement;
   private header = h('div', { c: 'root___RdBC0' });
   private tagsShown = false;
-  /** Stay on the newest message while the panel is resized or shown. */
+  /** Follow new messages: true while the reader is at the bottom (set by their scrolling, not re-measured). */
   private pinned = true;
+  /** Messages from others that arrived while the reader was scrolled up: Torn's "↓ N new messages" pill. */
+  private unseen = 0;
+  private pill: HTMLElement | null = null;
   private content = h('div', { c: 'content___aMpKJ' });
   private scroller = h('div', { c: 'scrollWrapper___DmIrl' });
   private list = h('div', {});
@@ -54,18 +57,26 @@ export class RoomPanel {
     this.scroller.append(this.list);
     // A panel rendered before it is on screen (page load, minimized) has no height yet, so
     // scrolling to the newest message does nothing; redo it when the scroller gets its size.
-    new ResizeObserver(() => {
+    // The same when the messages grow after rendering (pictures, emoji fonts, the scrollbar appearing).
+    const follow = new ResizeObserver(() => {
       if (this.pinned) this.scroller.scrollTop = this.scroller.scrollHeight;
-    }).observe(this.scroller);
+    });
+    follow.observe(this.scroller);
+    follow.observe(this.list);
     this.scroller.addEventListener('scroll', () => {
       if (this.scroller.clientHeight) this.pinned = this.atBottom();
+      if (this.pinned && this.unseen) this.setUnseen(0);
       if (this.scroller.scrollTop < 40 && state.more.get(id) && !this.loading) this.loadOlder();
       if (this.atBottom()) markRead(id);
     });
     this.content.append(h('div', { c: 'root___v2RvA' }, this.scroller, this.footer), this.composerSlot);
     this.el.append(this.header, this.content);
-    this.unsub = onRoomMessage((roomId) => {
-      if (roomId === id) this.renderMessages();
+    this.unsub = onRoomMessage((roomId, msg) => {
+      if (roomId !== id) return;
+      const mine = !!msg && msg.userId === state.me?.id;
+      if (msg && !mine && !this.pinned) this.setUnseen(this.unseen + 1);
+      // Sending a message always brings you to it, as in Torn's chat.
+      this.renderMessages(mine);
     });
     this.ticker = setInterval(() => this.renderFooter(), 30_000);
     this.update();
@@ -177,8 +188,35 @@ export class RoomPanel {
 
   // ---------------------------------------------------------------- messages
 
+  /** Within about one message of the end counts as the bottom. */
   private atBottom(): boolean {
-    return this.scroller.scrollHeight - this.scroller.scrollTop - this.scroller.clientHeight < 30;
+    return this.scroller.scrollHeight - this.scroller.scrollTop - this.scroller.clientHeight < 60;
+  }
+
+  private toBottom(): void {
+    this.pinned = true;
+    this.scroller.scrollTop = this.scroller.scrollHeight;
+    this.setUnseen(0);
+  }
+
+  private setUnseen(n: number): void {
+    this.unseen = n;
+    this.pill?.remove();
+    this.pill = null;
+    if (!n) return;
+    const close = h('div', { role: 'presentation', c: 'closeButton___zQTHG' }, icon('closeChat', 'closeIcon___UMWK4', 'Dismiss new messages'));
+    close.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.setUnseen(0);
+    });
+    this.pill = h(
+      'button',
+      { type: 'button', c: 'root___XpplE subtitle___u4sr8 root___dtYq3', style: 'color: white;', on: { click: () => this.toBottom() } },
+      arrowDown(),
+      `${n} new message${n === 1 ? '' : 's'}`,
+      close,
+    );
+    this.scroller.parentElement?.append(this.pill);
   }
 
   private async loadOlder(): Promise<void> {
@@ -194,7 +232,7 @@ export class RoomPanel {
   }
 
   renderMessages(forceBottom = false): void {
-    const stick = forceBottom || this.atBottom();
+    const stick = forceBottom || this.pinned || this.atBottom();
     const msgs = state.messages.get(this.id) ?? [];
     const meId = state.me?.id;
     const items: Child[] = [];
@@ -210,8 +248,7 @@ export class RoomPanel {
     this.list.replaceChildren(...(items as Node[]));
     this.renderFooter();
     if (stick) {
-      this.pinned = true;
-      this.scroller.scrollTop = this.scroller.scrollHeight;
+      this.toBottom();
       if (document.visibilityState === 'visible' && state.expanded.has(this.id)) markRead(this.id);
     }
   }
@@ -459,3 +496,16 @@ function withClick<T extends Element>(el: T, run: () => void): T {
   });
   return el;
 }
+
+/** Torn's "new messages" arrow (Font Awesome arrow-down, white). */
+function arrowDown(): SVGSVGElement {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  el.setAttribute('viewBox', '0 0 384 512');
+  el.setAttribute('height', '14');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M169.4 470.6c12.5 12.5 32.8 12.5 45.3 0l160-160c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L224 370.8 224 64c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 306.7L54.6 265.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l160 160z');
+  path.setAttribute('fill', 'white');
+  el.append(path);
+  return el;
+}
+

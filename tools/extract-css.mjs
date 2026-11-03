@@ -33,6 +33,14 @@ const missing = new Set(used);
 
 root.walkRules((rule) => {
   if (rule.parent.type === 'atrule' && /keyframes$/.test(rule.parent.name)) return;
+  // Torn styles its chat scrollbars by id (#chatRoot ::-webkit-scrollbar...); scope them to our root.
+  if (/^#chatRoot ::-webkit-scrollbar/.test(rule.selector)) {
+    rule.selector = rule.selector.replace(/^#chatRoot /, '.tr-root ');
+    rule.walkDecls((d) => {
+      for (const m of d.value.matchAll(/var\((--[A-Za-z0-9-]+)/g)) varsUsed.add(m[1]);
+    });
+    return;
+  }
   const sels = rule.selectors.filter((sel) => {
     const toks = classTokens(sel);
     if (toks.length === 0) return false;
