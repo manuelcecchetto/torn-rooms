@@ -36,7 +36,7 @@ export class RoomPanel {
   private menuOpen = false;
   private loading = false;
   private unsub: () => void;
-  private ticker: ReturnType<typeof setInterval>;
+  private footerTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(readonly id: string) {
     this.el = h('div', { c: 'root___Ex8tg root___hrPnu visible___IVBmB root___IOJWq tr-panel', 'data-room': id });
@@ -84,7 +84,6 @@ export class RoomPanel {
       if (msg) this.appendMessage(msg, mine);
       else this.renderMessages();
     });
-    this.ticker = setInterval(() => this.renderFooter(), 30_000);
     this.update();
     if (!state.messages.has(id) && state.rooms.get(id)?.joined) loadHistory(id).then(() => this.renderMessages(true), () => {});
     else this.renderMessages(true);
@@ -92,7 +91,7 @@ export class RoomPanel {
 
   destroy(): void {
     this.unsub();
-    clearInterval(this.ticker);
+    clearTimeout(this.footerTimer);
     this.el.remove();
   }
 
@@ -317,7 +316,11 @@ export class RoomPanel {
 
   private renderFooter(): void {
     const last = this.room?.lastMessage;
-    this.footer.replaceChildren(last ? text('divider2', 'root___Pai0M lastMessageTimeInfo___XV7Vj', {}, `Last message: ${ago(last.ts)}`) : '');
+    // As Torn: shown once the last message is a minute old, refreshed on each full minute since it was sent.
+    const age = last ? Date.now() - last.ts : 0;
+    this.footer.replaceChildren(last && age >= 60_000 ? text('divider2', 'root___Pai0M lastMessageTimeInfo___XV7Vj', {}, `Last message: ${ago(last.ts)}`) : '');
+    clearTimeout(this.footerTimer);
+    if (last) this.footerTimer = setTimeout(() => this.renderFooter(), 60_000 - (Math.max(0, age) % 60_000) + 50);
   }
 
   // ---------------------------------------------------------------- composer

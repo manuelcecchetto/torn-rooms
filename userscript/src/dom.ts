@@ -116,15 +116,24 @@ export function tctDay(ts: number): string {
   const d = new Date(ts);
   return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}/${String(d.getUTCFullYear()).slice(2)}`;
 }
-export function ago(ts: number): string {
-  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return 'a few seconds ago';
-  const m = Math.round(s / 60);
-  if (m < 60) return m === 1 ? 'a minute ago' : `${m} minutes ago`;
-  const hr = Math.round(m / 60);
-  if (hr < 24) return hr === 1 ? 'an hour ago' : `${hr} hours ago`;
-  const d = Math.round(hr / 24);
-  return d === 1 ? 'a day ago' : `${d} days ago`;
+/** Relative time as moment's fromNow() with its default thresholds, which Torn's chat uses ("an hour ago" from 45 minutes). */
+export function ago(ts: number, now = Date.now()): string {
+  const ms = Math.abs(now - ts);
+  const seconds = Math.round(ms / 1000);
+  const minutes = Math.round(ms / 60_000);
+  const hours = Math.round(ms / 3_600_000);
+  const days = Math.round(ms / 86_400_000);
+  const months = Math.round((ms / 86_400_000) * (4800 / 146097));
+  const years = Math.round((ms / 86_400_000) * (400 / 146097));
+  const unit = (n: number, one: string, many: string) => (n <= 1 ? one : `${n} ${many}`);
+  const s =
+    seconds < 45 ? 'a few seconds'
+    : minutes < 45 ? unit(minutes, 'a minute', 'minutes')
+    : hours < 22 ? unit(hours, 'an hour', 'hours')
+    : days < 26 ? unit(days, 'a day', 'days')
+    : months < 11 ? unit(months, 'a month', 'months')
+    : unit(years, 'a year', 'years');
+  return `${s} ago`;
 }
 
 /** Splits text into text nodes and https links, like Torn's chat. */
