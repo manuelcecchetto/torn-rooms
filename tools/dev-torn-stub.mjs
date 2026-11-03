@@ -4,9 +4,16 @@
 import http from 'node:http';
 
 const PORT = Number(process.env.PORT ?? 8792);
-const FACTIONS = { 1: 'Tesseract', 2: 'Allies United', 3: 'The Enemy' };
+// Fictional factions and players for local testing and the README screenshots (tools/demo-seed.mjs).
+const FACTIONS = { 1: ['Onyx Syndicate', 'ONYX'], 2: ['Vex', 'VEX'], 3: ['Koi Cartel', 'KOI'] };
+const AVATARS = 'https://raw.githubusercontent.com/manuelcecchetto/torn-rooms/main/docs/avatars/';
+export const CAST = {
+  2100001: ['Gh0stline', 'ghost'], 2100002: ['FoxyRoxy', 'foxy'], 2100003: ['Redline', 'redline'],
+  2100004: ['Bonez', 'bonez'], 2100005: ['SmokeyJoe', 'smokey'], 2100006: ['Whiskers', 'whiskers'],
+  2100007: ['HeistKing', 'heist'], 2100008: ['NeonByte', 'neonbyte'], 2100009: ['DonVito', 'donvito'],
+};
 
-http
+if (import.meta.url === `file://${process.argv[1]}`) http
   .createServer(async (req, res) => {
     const url = new URL(req.url, 'http://local');
     const key = url.searchParams.get('key') ?? '';
@@ -23,9 +30,11 @@ http
     const uid = Number(m[1]);
     const fid = Number(m[2]);
     // STUB_AVATAR=<url> gives test players a picture, to test the consent setting.
-    if (url.pathname === '/v2/user/profile') return send({ profile: { id: uid, name: `Tester${uid}`, image: process.env.STUB_AVATAR ?? null } });
+    const [name, avatar] = CAST[uid] ?? [process.env.STUB_NAME && uid === Number(process.env.STUB_UID) ? process.env.STUB_NAME : `Tester${uid}`, null];
+    const image = avatar ? `${AVATARS}${avatar}.png` : (process.env.STUB_AVATAR ?? null);
+    if (url.pathname === '/v2/user/profile') return send({ profile: { id: uid, name, image, status: { state: 'Okay' } } });
     if (url.pathname === '/v2/user/faction')
-      return send({ faction: fid ? { id: fid, name: FACTIONS[fid] ?? `Faction ${fid}`, tag: `F${fid}`, tag_image: '', position: 'Member', days_in_faction: 10 } : null });
+      return send({ faction: fid ? { id: fid, name: FACTIONS[fid]?.[0] ?? `Faction ${fid}`, tag: FACTIONS[fid]?.[1] ?? `F${fid}`, tag_image: '', position: 'Member', days_in_faction: 10 } : null });
     send({ error: { code: 9, error: 'stub: unknown path' } });
   })
   .listen(PORT, '127.0.0.1', () => console.log(`torn stub on ${PORT}`));

@@ -2,7 +2,7 @@
 //   TR_API_BASE=http://127.0.0.1:8787 node userscript/build.mjs   (local server)
 //   node userscript/build.mjs                                      (production server)
 import { build } from 'esbuild';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 const apiBase = (process.env.TR_API_BASE ?? 'https://torn-rooms.manuel-cecchetto99.workers.dev').replace(/\/$/, '');
@@ -16,6 +16,10 @@ const header = `// ==UserScript==
 // @namespace    torn-rooms
 // @version      ${buildId}
 // @description  Extra chat rooms in Torn's chat: invite players and whole factions, war rooms, public topic rooms.
+// @author       Manuel Cecchetto
+// @license      MIT
+// @homepageURL  https://github.com/manuelcecchetto/torn-rooms
+// @supportURL   https://github.com/manuelcecchetto/torn-rooms/issues
 // @match        https://www.torn.com/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
@@ -25,6 +29,11 @@ const header = `// ==UserScript==
 // @connect      ${host}
 // @connect      api.torn.com
 ${updateUrl ? `// @updateURL    ${updateUrl}\n// @downloadURL  ${updateUrl}\n` : ''}// ==/UserScript==
+
+// Torn Rooms ${buildId}: built with esbuild from the TypeScript sources at
+// https://github.com/manuelcecchetto/torn-rooms (userscript/src). Not minified.
+// It talks to the Torn Rooms server (${host}) and, to look up names when you invite someone,
+// to Torn's official API (api.torn.com) with your own key. It sends no requests to the torn.com site.
 `;
 
 await build({
@@ -39,3 +48,13 @@ await build({
   legalComments: 'none',
   logLevel: 'info',
 });
+
+// esbuild may emit an imported stylesheet as one "...\n..." string; turn those back into
+// multi-line template literals so the published script stays readable.
+const out = 'dist/torn-rooms.user.js';
+const js = readFileSync(out, 'utf8').replace(/^(\s*var \w+_default = )("(?:[^"\\]|\\.)*\\n(?:[^"\\]|\\.)*");$/gm, (line, lhs, lit) => {
+  const text = JSON.parse(lit);
+  return /[`\\]|\$\{/.test(text) ? line : `${lhs}\`${text}\`;`;
+});
+writeFileSync(out, js);
+

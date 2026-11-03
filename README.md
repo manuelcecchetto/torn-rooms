@@ -4,6 +4,16 @@ Extra chat rooms inside Torn's own chat bar, drawn with Torn's chat markup and C
 private rooms you share with players **or whole factions** (war rooms, alliance rooms),
 announcement rooms where only admins write, and public topic rooms anyone can join.
 
+![Rooms list, an alliance room with faction tags, a war room](docs/screenshots/overview.png)
+
+| | |
+|---|---|
+| ![Unread counters on rooms and chat bar](docs/screenshots/unread.png) | ![Public topic rooms](docs/screenshots/public-rooms.png) |
+| ![Room settings: icon, color, access, faction tags](docs/screenshots/settings.png) | ![Invitations, invites by player or faction, members](docs/screenshots/sharing.png) |
+
+Screenshots use fictional players, factions and AI-generated avatars (`docs/avatars`), seeded
+into a local server with `tools/demo-seed.mjs`.
+
 ## Install
 
 Install [Tampermonkey](https://www.tampermonkey.net/), then open `torn-rooms.user.js` (built into

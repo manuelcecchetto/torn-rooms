@@ -16,6 +16,8 @@ export class RoomPanel {
   readonly el: HTMLElement;
   private header = h('div', { c: 'root___RdBC0' });
   private tagsShown = false;
+  /** Stay on the newest message while the panel is resized or shown. */
+  private pinned = true;
   private content = h('div', { c: 'content___aMpKJ' });
   private scroller = h('div', { c: 'scrollWrapper___DmIrl' });
   private list = h('div', {});
@@ -50,7 +52,13 @@ export class RoomPanel {
     this.sendBtn = h('button', { type: 'button', c: 'iconWrapper___DRSkm', on: { click: () => this.submit() } }, icon('send', 'icon___mMNXf'));
     this.composer = h('div', { c: 'root___aBCjE' }, this.textarea, this.sendBtn);
     this.scroller.append(this.list);
+    // A panel rendered before it is on screen (page load, minimized) has no height yet, so
+    // scrolling to the newest message does nothing; redo it when the scroller gets its size.
+    new ResizeObserver(() => {
+      if (this.pinned) this.scroller.scrollTop = this.scroller.scrollHeight;
+    }).observe(this.scroller);
     this.scroller.addEventListener('scroll', () => {
+      if (this.scroller.clientHeight) this.pinned = this.atBottom();
       if (this.scroller.scrollTop < 40 && state.more.get(id) && !this.loading) this.loadOlder();
       if (this.atBottom()) markRead(id);
     });
@@ -202,6 +210,7 @@ export class RoomPanel {
     this.list.replaceChildren(...(items as Node[]));
     this.renderFooter();
     if (stick) {
+      this.pinned = true;
       this.scroller.scrollTop = this.scroller.scrollHeight;
       if (document.visibilityState === 'visible' && state.expanded.has(this.id)) markRead(this.id);
     }
