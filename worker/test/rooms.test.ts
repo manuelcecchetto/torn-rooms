@@ -378,3 +378,41 @@ describe('live updates', () => {
     for (const s of [o, a, x]) await s.close();
   });
 });
+
+describe('typing', () => {
+  it('tells members who is typing, by stream and poll, until they send; outsiders get nothing', async () => {
+    const owner = await login(5600, 5601);
+    const member = await login(5602, 5601);
+    const outsider = await login(5604, 0);
+    const room = await createRoom(owner, { name: 'Typing' });
+    expect((await call(owner, 'POST', `/v1/rooms/${room.id}/grants`, { kind: 'faction', id: 5601, label: 'Us' })).status).toBe(200);
+    expect((await call(member, 'POST', `/v1/rooms/${room.id}/join`)).status).toBe(200);
+    const m = await stream(member, [room.id]);
+    const o = await stream(owner, [room.id]);
+    await tick();
+
+    expect((await call(owner, 'POST', `/v1/rooms/${room.id}/typing`)).status).toBe(200);
+    expect((await call(outsider, 'POST', `/v1/rooms/${room.id}/typing`)).status).toBe(404);
+    await tick();
+    const ev = m.events.find((e) => e.t === 'typing');
+    expect(ev?.t === 'typing' && ev.users.map((u) => [u.userId, u.name])).toEqual([[5600, 'Player5600']]);
+    expect(o.events.some((e) => e.t === 'typing')).toBe(false);
+
+    const polled = (await call<PollResponse>(member, 'GET', '/v1/poll?open=')).body;
+    expect(polled.typing[room.id]?.map((u) => u.userId)).toEqual([5600]);
+    expect((await call<PollResponse>(owner, 'GET', '/v1/poll?open=')).body.typing).toEqual({});
+    expect((await call<PollResponse>(outsider, 'GET', '/v1/poll?open=')).body.typing).toEqual({});
+
+    await call(owner, 'POST', `/v1/rooms/${room.id}/messages`, { text: 'done' });
+    expect((await call<PollResponse>(member, 'GET', '/v1/poll?open=')).body.typing).toEqual({});
+    for (const s of [m, o]) await s.close();
+  });
+
+  it('has its own limit, outside the write budget', async () => {
+    const owner = await login(5700, 0);
+    const room = await createRoom(owner, { name: 'Chatty' });
+    for (let i = 0; i < LIMITS.typingPerMinute; i++) expect((await call(owner, 'POST', `/v1/rooms/${room.id}/typing`)).status).toBe(200);
+    expect((await call(owner, 'POST', `/v1/rooms/${room.id}/typing`)).status).toBe(429);
+    expect((await call(owner, 'POST', `/v1/rooms/${room.id}/messages`, { text: 'still fine' })).status).toBe(200);
+  });
+});

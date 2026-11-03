@@ -105,6 +105,15 @@ export interface PollResponse {
   history: Record<string, MessageView[]>;
   messages: MessageView[];
   cursor: number;
+  /** who is typing in the rooms the client receives, by room */
+  typing: Record<string, TypingUser[]>;
+}
+
+/** Someone typing in a room; `ms` is how long to keep showing them unless they ping again. */
+export interface TypingUser {
+  userId: number;
+  name: string;
+  ms: number;
 }
 
 export type ServerEvent =
@@ -112,6 +121,8 @@ export type ServerEvent =
   | { t: 'hello'; rooms: RoomView[]; history: Record<string, MessageView[]> }
   | { t: 'msg'; msg: MessageView }
   | { t: 'msg_deleted'; roomId: string; id: number }
+  /** everyone typing in the room now */
+  | { t: 'typing'; roomId: string; users: TypingUser[] }
   | { t: 'rooms_changed' };
 
 export const LIMITS = {
@@ -135,8 +146,14 @@ export const LIMITS = {
   invitesPerHour: 50,
   /** reads (polls, history, lists) per user per minute; a polling client uses ~15 */
   readsPerMinute: 120,
+  /** poll intervals: a room panel open, only the bar or the list, the app in the background */
   pollMs: 4000,
+  pollIdleMs: 15000,
   pollHiddenMs: 20000,
+  /** typing: a ping at most every typingPingMs while typing, shown for typingMs after the last one */
+  typingPingMs: 3000,
+  typingMs: 6000,
+  typingPerMinute: 30,
   /** event streams per user: a few Torn tabs */
   streamsPerUser: 5,
   loginsPerIp: 20,

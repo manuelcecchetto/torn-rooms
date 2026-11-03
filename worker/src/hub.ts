@@ -13,6 +13,7 @@ import {
   type PostPolicy,
   type RoomView,
   type ServerEvent,
+  type TypingUser,
   type Visibility,
 } from '../../shared/protocol';
 import { canManage, canPost, canSee, isJoined, isListed, receives, roleOf, type RoomCtx, type Viewer } from './access';
@@ -110,6 +111,8 @@ export class Hub extends DurableObject<Env> {
   private sql: SqlStorage;
   private ctxCache = new Map<string, RoomCtx>();
   private limiter = new Map<string, number[]>();
+  /** Who is typing where: memory only, never stored; entries expire after LIMITS.typingMs. */
+  private typing = new Map<string, Map<number, { name: string; at: number }>>();
   private limiterCalls = 0;
   private streams = new Set<Stream>();
   private heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -539,7 +542,33 @@ export class Hub extends DurableObject<Env> {
     }
     const msg = toMessage(row);
     this.emit((s) => receives(room, s.caller), { t: 'msg', msg });
+    this.typing.get(id)?.delete(c.id);
     return ok(msg);
+  }
+
+  async setTyping(c: Caller, id: string): Promise<Res<{ ok: true }>> {
+    const room = this.roomCtx(id);
+    if (!room || !receives(room, c) || !canPost(room, c)) return fail(404, 'Room not found');
+    let users = this.typing.get(id);
+    if (!users) this.typing.set(id, (users = new Map()));
+    users.set(c.id, { name: c.name, at: Date.now() });
+    this.emit((s) => s.caller.id !== c.id && receives(room, s.caller), { t: 'typing', roomId: id, users: this.typers(id) });
+    return ok({ ok: true });
+  }
+
+  /** Who is typing in a room now; drops expired entries. */
+  private typers(id: string): TypingUser[] {
+    const users = this.typing.get(id);
+    if (!users) return [];
+    const now = Date.now();
+    const live: TypingUser[] = [];
+    for (const [userId, t] of users) {
+      const ms = LIMITS.typingMs - (now - t.at);
+      if (ms > 0) live.push({ userId, name: t.name, ms });
+      else users.delete(userId);
+    }
+    if (!users.size) this.typing.delete(id);
+    return live;
   }
 
   async deleteMessage(c: Caller, id: string, messageId: number): Promise<Res<{ ok: true }>> {
@@ -565,6 +594,11 @@ export class Hub extends DurableObject<Env> {
     if (this.isBanned(c.id)) return fail(403, 'You are banned from Torn Rooms');
     if (m === 'GET' && !this.allow(`read:${c.id}`, LIMITS.readsPerMinute, 60_000)) return fail(429, 'Slow down');
     if (p[1] === 'poll' && p.length === 2 && m === 'GET') return this.poll(c, query.open ?? '', query.after);
+    // Typing pings are frequent and touch no storage: their own limit, outside the write budget.
+    if (p[1] === 'rooms' && p.length === 4 && p[3] === 'typing' && m === 'POST') {
+      if (!this.allow(`typing:${c.id}`, LIMITS.typingPerMinute, 60_000)) return fail(429, 'Slow down');
+      return this.setTyping(c, p[2]);
+    }
     if (m !== 'GET') {
       if (!this.allow(`write:${c.id}`, LIMITS.writesPerMinute, 60_000)) return fail(429, 'Slow down');
       if (p[3] === 'grants' && m === 'POST' && !this.allow(`invite:${c.id}`, LIMITS.invitesPerHour, 3_600_000)) {
@@ -623,7 +657,13 @@ export class Hub extends DurableObject<Env> {
   private async poll(c: Caller, open: string, after: string | undefined): Promise<Res<PollResponse>> {
     const cursor = this.rows<{ n: number }>('SELECT COALESCE(MAX(id), 0) AS n FROM messages')[0].n;
     const since = Number(after);
-    if (after === undefined || !Number.isInteger(since) || since < 0) return ok({ ...(await this.snapshot(c, open)), messages: [], cursor });
+    const typing: Record<string, TypingUser[]> = {};
+    for (const id of [...this.typing.keys()]) {
+      const room = this.roomCtx(id);
+      const users = room && receives(room, c) ? this.typers(id).filter((u) => u.userId !== c.id) : [];
+      if (users.length) typing[id] = users;
+    }
+    if (after === undefined || !Number.isInteger(since) || since < 0) return ok({ ...(await this.snapshot(c, open)), messages: [], cursor, typing });
     const { rooms } = await this.snapshot(c, '');
     const messages = this.rows<MessageRow>('SELECT * FROM messages WHERE id > ? AND id <= ? AND deleted = 0 ORDER BY id LIMIT 500', since, cursor)
       .filter((r) => {
@@ -631,7 +671,7 @@ export class Hub extends DurableObject<Env> {
         return room !== undefined && receives(room, c);
       })
       .map(toMessage);
-    return ok({ rooms, history: {}, messages, cursor });
+    return ok({ rooms, history: {}, messages, cursor, typing });
   }
 
   /** Logins per client IP: each one costs two Torn API calls. */

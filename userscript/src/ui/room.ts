@@ -52,7 +52,10 @@ export class RoomPanel {
             this.submit();
           }
         },
-        input: () => this.syncSend(),
+        input: () => {
+          this.syncSend();
+          this.pingTyping();
+        },
       },
     });
     this.sendBtn = h('button', { type: 'button', c: 'iconWrapper___DRSkm', on: { click: () => this.submit() } }, icon('send', 'icon___mMNXf'));
@@ -314,16 +317,40 @@ export class RoomPanel {
     );
   }
 
+  private footerText = '';
+
   private renderFooter(): void {
     const last = this.room?.lastMessage;
-    // As Torn: shown once the last message is a minute old, refreshed on each full minute since it was sent.
     const age = last ? Date.now() - last.ts : 0;
-    this.footer.replaceChildren(last && age >= 60_000 ? text('divider2', 'root___Pai0M lastMessageTimeInfo___XV7Vj', {}, `Last message: ${ago(last.ts)}`) : '');
+    // As Torn: who is typing; else "Last message" once the last message is a minute old, refreshed on each full minute since it was sent.
+    const typing = typingLabel((state.typing.get(this.id) ?? []).map((u) => u.name));
+    const line = typing || (last && age >= 60_000 ? `Last message: ${ago(last.ts)}` : '');
+    // Only when the line changes, so the typing dots keep flashing through other updates.
+    if (line !== this.footerText) {
+      this.footerText = line;
+      this.footer.replaceChildren(
+        typing
+          ? h('div', { c: 'root___XpplE divider2___nG653 root___koA3y typingIndicator___Lo_wW visible___geRbO' }, h('div', { c: 'root___gGAMB' }), typing)
+          : line
+            ? text('divider2', 'root___Pai0M lastMessageTimeInfo___XV7Vj', {}, line)
+            : '',
+      );
+    }
     clearTimeout(this.footerTimer);
     if (last) this.footerTimer = setTimeout(() => this.renderFooter(), 60_000 - (Math.max(0, age) % 60_000) + 50);
   }
 
   // ---------------------------------------------------------------- composer
+
+  private typingSent = 0;
+
+  /** While there is text: a typing ping at most every few seconds. */
+  private pingTyping(): void {
+    const now = Date.now();
+    if (!this.textarea.value.trim() || now - this.typingSent < LIMITS.typingPingMs) return;
+    this.typingSent = now;
+    api('POST', `/v1/rooms/${this.id}/typing`).catch(() => {});
+  }
 
   private syncSend(): void {
     this.sendBtn.disabled = !this.textarea.value.trim();
@@ -356,6 +383,7 @@ export class RoomPanel {
     const value = this.textarea.value.trim();
     if (!value) return;
     this.textarea.value = '';
+    this.typingSent = 0;
     this.syncSend();
     try {
       await send(this.id, value);
@@ -489,6 +517,14 @@ export class RoomPanel {
     draw();
     return backView('Back to chat', back, '', [body]);
   }
+}
+
+/** Torn's typing indicator text. */
+function typingLabel(names: string[]): string {
+  if (names.length === 0) return '';
+  if (names.length === 1) return `${names[0]} is typing...`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing...`;
+  return 'Several people are typing...';
 }
 
 /** Torn's avatar rule: the player's picture, or Torn's default when missing or broken. */

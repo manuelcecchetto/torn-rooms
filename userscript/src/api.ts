@@ -250,7 +250,8 @@ function pollEvents(openRooms: () => string[], onEvent: (ev: ServerEvent) => voi
   const schedule = () => {
     if (stopped) return;
     const visible = document.visibilityState === 'visible';
-    const base = visible ? LIMITS.pollMs : LIMITS.pollHiddenMs;
+    // Fast only while a room panel is open: the bar and the rooms list can wait a little.
+    const base = !visible ? LIMITS.pollHiddenMs : openRooms().length ? LIMITS.pollMs : LIMITS.pollIdleMs;
     timer = setTimeout(tick, Math.min(base * 2 ** failures, 60_000));
   };
   // Coming back to the app should not wait out the slow background interval.
@@ -271,6 +272,7 @@ function pollEvents(openRooms: () => string[], onEvent: (ev: ServerEvent) => voi
       // The room list first: it already counts the new messages as unread, so they are not counted twice.
       onEvent({ t: 'hello', rooms: res.rooms, history: res.history });
       for (const msg of res.messages) onEvent({ t: 'msg', msg });
+      for (const [roomId, users] of Object.entries(res.typing ?? {})) onEvent({ t: 'typing', roomId, users });
       cursor = res.cursor;
       failures = 0;
       onState('live');

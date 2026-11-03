@@ -1,5 +1,5 @@
 // Client state: who we are, our rooms, loaded messages, which panels are open.
-import { LIMITS, type Me, type MessageView, type RoomView, type ServerEvent } from '../../shared/protocol';
+import { LIMITS, type Me, type MessageView, type RoomView, type ServerEvent, type TypingUser } from '../../shared/protocol';
 import { api, type ConnState } from './api';
 
 export type DirectoryTab = 'rooms' | 'invites' | 'browse' | 'settings';
@@ -25,6 +25,8 @@ export const state = {
   /** the first hello event arrived */
   ready: false,
   error: null as string | null,
+  /** who else is typing, by room, until when */
+  typing: new Map<string, { userId: number; name: string; until: number }[]>(),
 };
 
 type Listener = () => void;
@@ -238,6 +240,28 @@ export function senderName(room: RoomView | undefined, m: MessageView): string {
   return room?.showFactionTags && m.factionTag ? `[${m.factionTag}] ${m.name}` : m.name;
 }
 
+let typingTimer: ReturnType<typeof setTimeout> | undefined;
+function setTyping(roomId: string, users: TypingUser[]): void {
+  const now = Date.now();
+  state.typing.set(roomId, users.filter((u) => u.userId !== state.me?.id).map((u) => ({ userId: u.userId, name: u.name, until: now + u.ms })));
+  pruneTyping();
+}
+
+/** Drops typers whose last ping ran out, and comes back when the next one does. */
+function pruneTyping(): void {
+  const now = Date.now();
+  let next = Infinity;
+  for (const [id, users] of state.typing) {
+    const live = users.filter((u) => u.until > now);
+    if (live.length) state.typing.set(id, live);
+    else state.typing.delete(id);
+    for (const u of live) next = Math.min(next, u.until);
+  }
+  clearTimeout(typingTimer);
+  if (next < Infinity) typingTimer = setTimeout(pruneTyping, next - now + 20);
+  changed();
+}
+
 let readTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** Marks everything loaded in the room as read (debounced). */
 export function markRead(id: string): void {
@@ -280,6 +304,9 @@ export function handleEvent(ev: ServerEvent): void {
     setRooms(ev.rooms);
   } else if (ev.t === 'msg') {
     addMessage(ev.msg);
+    // Sending ends typing.
+    const typers = state.typing.get(ev.msg.roomId);
+    if (typers) state.typing.set(ev.msg.roomId, typers.filter((u) => u.userId !== ev.msg.userId));
     // A message in a room we have joined but not opened in this tab: show its button, like Torn does.
     if (!state.open.includes(ev.msg.roomId) && state.rooms.get(ev.msg.roomId)?.joined) {
       state.open.push(ev.msg.roomId);
@@ -290,6 +317,8 @@ export function handleEvent(ev: ServerEvent): void {
     if (list) state.messages.set(ev.roomId, list.filter((m) => m.id !== ev.id));
     for (const fn of messageListeners) fn(ev.roomId, null);
     changed();
+  } else if (ev.t === 'typing') {
+    setTyping(ev.roomId, ev.users);
   } else if (ev.t === 'rooms_changed') {
     refreshRooms().catch(() => {});
   }
