@@ -55,7 +55,8 @@ sender names (handy in alliance rooms); profile pictures only for players who op
   are Server-Sent Events read with `responseType: 'stream'` (`userscript/src/api.ts`).
   Torn PDA routes `GM_xmlhttpRequest` through its native HTTP handler, which returns a response
   only once it is complete, so on PDA the script polls `GET /v1/poll` instead (every 4 s while a
-  room panel is open, 15 s otherwise, 20 s in the background); the server answers with the same rooms and messages the
+  room panel is open, 15 s otherwise, and not at all in the background: the first poll back
+  catches up); the server answers with the same rooms and messages the
   stream would have sent.
 - **Look.** `tools/extract-css.mjs` copies the rules of Torn's chat stylesheet that our markup uses,
   renaming every `name___hash` class to `tr_name___hash`, so the rooms look identical but never

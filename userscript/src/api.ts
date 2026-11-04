@@ -265,17 +265,18 @@ function pollEvents(openRooms: () => string[], onEvent: (ev: ServerEvent) => voi
   let timer: ReturnType<typeof setTimeout> | null = null;
   let cursor: number | null = null;
   let failures = 0;
+  let busy = false;
+  const visible = () => document.visibilityState === 'visible';
 
+  // No polling in the background: nothing there is seen, and the first poll back catches up from the cursor.
   const schedule = () => {
-    if (stopped) return;
-    const visible = document.visibilityState === 'visible';
+    if (stopped || !visible()) return;
     // Fast only while a room panel is open: the bar and the rooms list can wait a little.
-    const base = !visible ? LIMITS.pollHiddenMs : openRooms().length ? LIMITS.pollMs : LIMITS.pollIdleMs;
+    const base = openRooms().length ? LIMITS.pollMs : LIMITS.pollIdleMs;
     timer = setTimeout(tick, Math.min(base * 2 ** failures, 60_000));
   };
-  // Coming back to the app should not wait out the slow background interval.
   const onVisible = () => {
-    if (document.visibilityState !== 'visible' || stopped) return;
+    if (!visible() || stopped || busy) return;
     if (timer) clearTimeout(timer);
     tick();
   };
@@ -283,7 +284,8 @@ function pollEvents(openRooms: () => string[], onEvent: (ev: ServerEvent) => voi
 
   async function tick() {
     timer = null;
-    if (stopped) return;
+    if (stopped || !visible()) return;
+    busy = true;
     try {
       const open = openRooms().map(encodeURIComponent).join(',');
       const res = await api<PollResponse>('GET', `/v1/poll?open=${open}${cursor === null ? '' : `&after=${cursor}`}`);
@@ -303,6 +305,7 @@ function pollEvents(openRooms: () => string[], onEvent: (ev: ServerEvent) => voi
       failures = Math.min(failures + 1, 4);
       onState('offline');
     }
+    busy = false;
     schedule();
   }
 

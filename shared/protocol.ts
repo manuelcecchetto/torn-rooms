@@ -146,10 +146,9 @@ export const LIMITS = {
   invitesPerHour: 50,
   /** reads (polls, history, lists) per user per minute; a polling client uses ~15 */
   readsPerMinute: 120,
-  /** poll intervals: a room panel open, only the bar or the list, the app in the background */
+  /** poll intervals: a room panel open, only the bar or the list (none in the background) */
   pollMs: 4000,
   pollIdleMs: 15000,
-  pollHiddenMs: 20000,
   /** typing: a ping at most every typingPingMs while typing, shown for typingMs after the last one */
   typingPingMs: 3000,
   typingMs: 6000,
