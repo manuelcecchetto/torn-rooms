@@ -159,6 +159,20 @@ export function openEvents(openRooms: () => string[], onEvent: (ev: ServerEvent)
   let current: { abort(): void } | null = null;
   let delay = 1000;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let watchdog: ReturnType<typeof setTimeout> | null = null;
+  let streamed = false;
+  let polling: (() => void) | null = null;
+
+  // Script managers without streaming (only Tampermonkey is known to stream) hand back no readable
+  // body, or nothing until the response ends: poll instead, as on Torn PDA.
+  const fallBack = () => {
+    if (stopped) return;
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    if (watchdog) clearTimeout(watchdog);
+    current?.abort();
+    polling = pollEvents(openRooms, onEvent, onState);
+  };
 
   const retry = () => {
     if (stopped) return;
@@ -193,6 +207,12 @@ export function openEvents(openRooms: () => string[], onEvent: (ev: ServerEvent)
       };
       document.addEventListener('visibilitychange', resume);
     };
+    // The server's first event comes at once; a first stream that shows nothing for 20 seconds never will.
+    if (!streamed && !watchdog) {
+      watchdog = setTimeout(() => {
+        if (!streamed) fallBack();
+      }, 20_000);
+    }
     current = GM_xmlhttpRequest({
       method: 'GET',
       url: `${__API_BASE__}/v1/events?open=${openRooms().map(encodeURIComponent).join(',')}`,
@@ -208,7 +228,9 @@ export function openEvents(openRooms: () => string[], onEvent: (ev: ServerEvent)
           }
           return end();
         }
-        const reader = (r.response as ReadableStream<Uint8Array>).getReader();
+        const body = r.response as ReadableStream<Uint8Array> | null | undefined;
+        if (!body || typeof body.getReader !== 'function') return fallBack();
+        const reader = body.getReader();
         const dec = new TextDecoder();
         let buf = '';
         delay = 1000;
@@ -227,6 +249,7 @@ export function openEvents(openRooms: () => string[], onEvent: (ev: ServerEvent)
               if (event === 'expired') await session(true).catch(() => {});
               if (event === 'replaced') replaced = true;
               const data = lines.find((l) => l.startsWith('data: '));
+              if (data) streamed = true;
               if (!event && data) onEvent(JSON.parse(data.slice(6)) as ServerEvent);
             }
           }
@@ -246,7 +269,9 @@ export function openEvents(openRooms: () => string[], onEvent: (ev: ServerEvent)
   return () => {
     stopped = true;
     if (timer) clearTimeout(timer);
+    if (watchdog) clearTimeout(watchdog);
     current?.abort();
+    polling?.();
   };
 }
 
