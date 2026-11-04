@@ -22,7 +22,9 @@ with your own Torn API key (Public access is enough).
 
 What you get: rooms with their own icon and color, shared with players or whole factions; unread
 counters on the chat bar; members, invites, admins and bans per room; an optional `[TAG]` before
-sender names (handy in alliance rooms); profile pictures only for players who opt in.
+sender names (handy in alliance rooms); profile pictures only for players who opt in. Close a room
+with the X in its header, like a private chat; it stays in the **Rooms** list, and a new message
+brings its button back.
 
 ## Layout
 

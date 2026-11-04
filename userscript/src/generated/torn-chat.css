@@ -1183,6 +1183,10 @@
   margin-bottom: 4px;
   margin-left: auto;
 }
+.tr_closeIcon___s4Gjc {
+  cursor: pointer;
+  margin-left: 17px;
+}
 .tr_optionsContainer___CpJ5q {
   background-color: #444 #fff;
   background-color: var(--chat-theme-dark,#444) var(--chat-theme-light,#fff);

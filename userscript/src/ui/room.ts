@@ -3,7 +3,7 @@ import { LIMITS, type AccessView, type MessageView, type RoomView } from '../../
 import { api } from '../api';
 import { ago, cx, fill, h, icon, linkify, retryIcon, roomIcon, tct, tctDay, text, type Child } from '../dom';
 import type { IconName } from '../generated/icons';
-import { deleteRoom, discard, join, leave, loadHistory, markRead, onRoomMessage, refreshRooms, retry, send, senderName, state, toggleRoom, type PendingMessage } from '../store';
+import { closeRoom, deleteRoom, discard, join, leave, loadHistory, markRead, onRoomMessage, refreshRooms, retry, send, senderName, state, toggleRoom, type PendingMessage } from '../store';
 import { backView, info, parseTornId, setting, textInput, tornBtn, warning } from './forms';
 import { roomForm } from './roomForm';
 import defaultAvatar from '../../assets/avatar-default.jpg';
@@ -175,6 +175,8 @@ export class RoomPanel {
           icon('arrow', 'icon___MBR1e arrowIcon___RgJFw'),
         ),
         withClick(icon('minimize', 'icon___MBR1e minimizeIcon___Bk5cS', `Minimize ${room.name}`), () => toggleRoom(this.id)),
+        // Like a private chat's X: the room leaves the chat bar and comes back from the Rooms panel.
+        withClick(icon('closeChat', 'icon___MBR1e closeIcon___s4Gjc', `Close ${room.name}`), () => closeRoom(this.id)),
       ),
       this.menuOpen
         ? h(
