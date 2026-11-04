@@ -98,6 +98,24 @@ export function logout(): void {
 
 let pending: Promise<AuthResponse> | null = null;
 
+/**
+ * Resolves once the player is on this tab: visible, and focused or touched. Torn's rules allow
+ * sending data from a Torn page (here the logged-in player's id) only while it is actively viewed.
+ */
+function whenActive(): Promise<void> {
+  const active = () => document.visibilityState === 'visible' && document.hasFocus();
+  if (active()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const events = ['focus', 'pointerdown', 'keydown'];
+    const done = () => {
+      if (document.visibilityState !== 'visible') return;
+      for (const e of events) window.removeEventListener(e, done, true);
+      resolve();
+    };
+    for (const e of events) window.addEventListener(e, done, true);
+  });
+}
+
 /** A valid session, logging in again with the stored key when the token is about to expire. */
 export async function session(force = false): Promise<AuthResponse> {
   const s = force ? null : storedSession();
@@ -108,7 +126,8 @@ export async function session(force = false): Promise<AuthResponse> {
   const owner = GM_getValue<number>(KEY_OWNER, 0);
   const pageUser = pageUserId();
   if (owner && pageUser && owner !== pageUser) throw new ApiError(403, `Your saved key belongs to player [${owner}], not the player logged in here. Log in with this player's own key.`);
-  pending ??= login(key)
+  // Automatic re-logins (expired token, a tab loaded in the background) wait for the player to look at the tab.
+  pending ??= whenActive().then(() => login(key))
     .catch((e) => {
       // Refused for good (another player's key, or banned): forget it instead of retrying every page.
       if (e instanceof ApiError && e.status === 403) logout();

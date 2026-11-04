@@ -21,6 +21,6 @@
     "esbuild@0.28.2": true,
     "workerd@1.20261103.1": true
   },
-  "version": "0.1.8",
+  "version": "0.1.9",
   "license": "MIT"
 }

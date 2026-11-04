@@ -41,6 +41,10 @@ sender names (handy in alliance rooms); profile pictures only for players who op
   fake that value, so it is not proof of identity: it stops bought or leaked keys used with the
   published script. Real proof would need an in-game action (a Torn mail or $1 with a code to a bot
   account); see the discussion in `research/FINDINGS.md`.
+  That player id is the only page data the script sends anywhere, and it does so only while the
+  Torn tab is actively viewed (visible, and focused or touched): Torn's scripting rules forbid
+  sending data from unfocused pages, so an automatic re-login in a background tab waits for the
+  player (`whenActive` in `userscript/src/api.ts`).
   Torn PDA fills `###PDA-APIKEY###` automatically.
 - **Access.** A private room is visible to its owner, admins, invited players and every member of
   invited factions; leaving the faction removes access at the next login. Public rooms can only be
@@ -50,8 +54,8 @@ sender names (handy in alliance rooms); profile pictures only for players who op
   Tampermonkey's `@sandbox DOM`. Everything therefore goes through `GM_xmlhttpRequest`; live events
   are Server-Sent Events read with `responseType: 'stream'` (`userscript/src/api.ts`).
   Torn PDA routes `GM_xmlhttpRequest` through its native HTTP handler, which returns a response
-  only once it is complete, so on PDA the script polls `GET /v1/poll` instead (every 4 s while
-  visible, 20 s in the background); the server answers with the same rooms and messages the
+  only once it is complete, so on PDA the script polls `GET /v1/poll` instead (every 4 s while a
+  room panel is open, 15 s otherwise, 20 s in the background); the server answers with the same rooms and messages the
   stream would have sent.
 - **Look.** `tools/extract-css.mjs` copies the rules of Torn's chat stylesheet that our markup uses,
   renaming every `name___hash` class to `tr_name___hash`, so the rooms look identical but never
