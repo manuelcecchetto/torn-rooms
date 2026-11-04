@@ -36,3 +36,5 @@ declare function GM_xmlhttpRequest(details: GMRequest): { abort(): void };
 declare function GM_getValue<T>(key: string, fallback: T): T;
 declare function GM_setValue(key: string, value: unknown): void;
 declare function GM_deleteValue(key: string): void;
+/** Set by every userscript manager without a grant; scriptHandler names the manager. */
+declare const GM_info: { scriptHandler?: string } | undefined;

@@ -276,12 +276,14 @@ export function openEvents(openRooms: () => string[], onEvent: (ev: ServerEvent)
 }
 
 /**
- * Torn PDA routes GM_xmlhttpRequest through its native HTTP handler, which hands back a response only
- * once it is complete, so a stream that never ends never arrives. It also runs scripts in an
- * InAppWebView, which is how we recognise it.
+ * Only Tampermonkey is known to stream GM_xmlhttpRequest responses; Violentmonkey and others hand back
+ * nothing until a response ends, so a stream that never ends never arrives. Torn PDA (an InAppWebView)
+ * routes requests through its native HTTP handler with the same limit. Everyone else polls; a manager
+ * that claims to be Tampermonkey but cannot stream still falls back after 20 seconds (openEvents).
  */
 function canStream(): boolean {
-  return !__FORCE_POLL__ && typeof (window as { flutter_inappwebview?: unknown }).flutter_inappwebview === 'undefined';
+  if (__FORCE_POLL__ || typeof (window as { flutter_inappwebview?: unknown }).flutter_inappwebview !== 'undefined') return false;
+  return typeof GM_info !== 'undefined' && GM_info?.scriptHandler === 'Tampermonkey';
 }
 
 /** The stream's events from GET /v1/poll: a hello first, then the room list and new messages. */

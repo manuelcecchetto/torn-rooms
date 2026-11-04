@@ -53,8 +53,9 @@ sender names (handy in alliance rooms); profile pictures only for players who op
 - **Transport.** Torn's CSP (`connect-src`) blocks `fetch` and `WebSocket` to other hosts, even from
   Tampermonkey's `@sandbox DOM`. Everything therefore goes through `GM_xmlhttpRequest`; live events
   are Server-Sent Events read with `responseType: 'stream'` (`userscript/src/api.ts`).
-  Script managers that cannot stream (only Tampermonkey is known to) get no readable body, or
-  nothing for 20 seconds; the script then polls instead, as on Torn PDA.
+  Only Tampermonkey is known to stream (`GM_info.scriptHandler`); every other manager, Violentmonkey
+  included, polls like Torn PDA. A manager that cannot stream after all (no readable body, or nothing
+  for 20 seconds) falls back to polling too.
   Torn PDA routes `GM_xmlhttpRequest` through its native HTTP handler, which returns a response
   only once it is complete, so on PDA the script polls `GET /v1/poll` instead (every 4 s while a
   room panel is open, 15 s otherwise, and not at all in the background: the first poll back
