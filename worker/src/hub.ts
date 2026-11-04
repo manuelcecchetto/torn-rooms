@@ -5,12 +5,15 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   LIMITS,
+  REACTIONS,
   type AccessView,
   type BrowseRoom,
   type GrantKind,
   type MessageView,
   type PollResponse,
   type PostPolicy,
+  type ReactionView,
+  type ReactionsUpdate,
   type RoomView,
   type ServerEvent,
   type TypingUser,
@@ -46,8 +49,9 @@ CREATE TABLE IF NOT EXISTS admins(room_id TEXT NOT NULL, user_id INTEGER NOT NUL
 CREATE TABLE IF NOT EXISTS bans(room_id TEXT NOT NULL, user_id INTEGER NOT NULL, label TEXT NOT NULL, banned_by INTEGER NOT NULL, banned_at INTEGER NOT NULL, PRIMARY KEY(room_id, user_id));
 CREATE TABLE IF NOT EXISTS memberships(room_id TEXT NOT NULL, user_id INTEGER NOT NULL, state TEXT NOT NULL, last_read INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(room_id, user_id));
 CREATE INDEX IF NOT EXISTS memberships_user ON memberships(user_id);
-CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL, user_id INTEGER NOT NULL, name TEXT NOT NULL, avatar TEXT, faction_tag TEXT, text TEXT NOT NULL, ts INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL, user_id INTEGER NOT NULL, name TEXT NOT NULL, avatar TEXT, faction_tag TEXT, text TEXT NOT NULL, ts INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, react_seq INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS messages_room ON messages(room_id, id);
+CREATE TABLE IF NOT EXISTS reactions(message_id INTEGER NOT NULL, room_id TEXT NOT NULL, user_id INTEGER NOT NULL, emoji TEXT NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY(message_id, user_id, emoji));
 `;
 
 interface RoomRow {
@@ -74,6 +78,8 @@ interface MessageRow {
   faction_tag: string | null;
   text: string;
   ts: number;
+  /** when its reactions last changed, on one counter for all messages (polling clients catch up from it) */
+  react_seq: number;
 }
 
 type Row = Record<string, SqlStorageValue>;
@@ -105,7 +111,9 @@ interface Stream {
 const encoder = new TextEncoder();
 const HEARTBEAT_MS = 20_000;
 
-const toMessage = (r: MessageRow): MessageView => ({ id: r.id, roomId: r.room_id, userId: r.user_id, name: r.name, avatar: r.avatar, factionTag: r.faction_tag, text: r.text, ts: r.ts });
+const toMessage = (r: MessageRow, reactions: ReactionView[] = []): MessageView => ({
+  id: r.id, roomId: r.room_id, userId: r.user_id, name: r.name, avatar: r.avatar, factionTag: r.faction_tag, text: r.text, ts: r.ts, reactions,
+});
 
 export class Hub extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -127,6 +135,8 @@ export class Hub extends DurableObject<Env> {
     if (!roomCols.has('show_tags')) this.sql.exec('ALTER TABLE rooms ADD COLUMN show_tags INTEGER NOT NULL DEFAULT 0');
     const msgCols = new Set(this.rows<{ name: string }>("SELECT name FROM pragma_table_info('messages')").map((c) => c.name));
     if (!msgCols.has('faction_tag')) this.sql.exec('ALTER TABLE messages ADD COLUMN faction_tag TEXT');
+    if (!msgCols.has('react_seq')) this.sql.exec('ALTER TABLE messages ADD COLUMN react_seq INTEGER NOT NULL DEFAULT 0');
+    this.sql.exec('CREATE INDEX IF NOT EXISTS messages_react ON messages(react_seq)');
     const userCols = new Set(this.rows<{ name: string }>("SELECT name FROM pragma_table_info('users')").map((c) => c.name));
     if (!userCols.has('show_avatar')) {
       // Pictures were stored before consent existed: nobody has agreed yet, so drop them.
@@ -369,7 +379,7 @@ export class Hub extends DurableObject<Env> {
     if (!room || !canSee(room, c)) return fail(404, 'Room not found');
     if (room.ownerId !== c.id && !(c.superadmin && room.visibility === 'public')) return fail(403, 'Only the owner can delete a room');
     this.mutateRoom(id, () => {
-      for (const t of ['rooms', 'grants', 'admins', 'bans', 'memberships', 'messages']) {
+      for (const t of ['rooms', 'grants', 'admins', 'bans', 'memberships', 'messages', 'reactions']) {
         this.sql.exec(`DELETE FROM ${t} WHERE ${t === 'rooms' ? 'id' : 'room_id'} = ?`, id);
       }
     });
@@ -514,7 +524,7 @@ export class Hub extends DurableObject<Env> {
       'SELECT * FROM messages WHERE room_id = ? AND deleted = 0 AND id < ? ORDER BY id DESC LIMIT ?',
       id, before > 0 ? before : Number.MAX_SAFE_INTEGER, LIMITS.historyPage,
     );
-    return ok({ messages: rows.reverse().map(toMessage) });
+    return ok({ messages: this.withReactions(rows.reverse()) });
   }
 
   async post(c: Caller, id: string, text: unknown): Promise<Res<MessageView>> {
@@ -539,6 +549,7 @@ export class Hub extends DurableObject<Env> {
         'DELETE FROM messages WHERE room_id = ? AND id <= (SELECT id FROM messages WHERE room_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?)',
         id, id, LIMITS.keptMessagesPerRoom,
       );
+      this.sql.exec('DELETE FROM reactions WHERE room_id = ? AND message_id NOT IN (SELECT id FROM messages WHERE room_id = ?)', id, id);
     }
     const msg = toMessage(row);
     this.emit((s) => receives(room, s.caller), { t: 'msg', msg });
@@ -578,8 +589,52 @@ export class Hub extends DurableObject<Env> {
     if (!m) return fail(404, 'Message not found');
     if (m.user_id !== c.id && !canManage(room, c)) return fail(403, 'You can only delete your own messages');
     this.sql.exec('UPDATE messages SET deleted = 1 WHERE id = ?', messageId);
+    this.sql.exec('DELETE FROM reactions WHERE message_id = ?', messageId);
     this.emit((s) => receives(room, s.caller), { t: 'msg_deleted', roomId: id, id: messageId });
     return ok({ ok: true });
+  }
+
+  /** Messages with their reactions; one query for the whole page (ids are global, so a range covers it). */
+  private withReactions(rows: MessageRow[]): MessageView[] {
+    const reacted = rows.filter((r) => r.react_seq > 0).map((r) => r.id);
+    if (!reacted.length) return rows.map((r) => toMessage(r));
+    const all = this.reactionsIn(Math.min(...reacted), Math.max(...reacted));
+    return rows.map((r) => toMessage(r, all.get(r.id)));
+  }
+
+  private reactionsIn(from: number, to: number): Map<number, ReactionView[]> {
+    const rows = this.rows<{ message_id: number; emoji: string; user_id: number; name: string | null }>(
+      `SELECT r.message_id, r.emoji, r.user_id, u.name FROM reactions r LEFT JOIN users u ON u.id = r.user_id
+       WHERE r.message_id BETWEEN ? AND ? ORDER BY r.ts, r.rowid`,
+      from, to,
+    );
+    const out = new Map<number, ReactionView[]>();
+    for (const r of rows) {
+      let list = out.get(r.message_id);
+      if (!list) out.set(r.message_id, (list = []));
+      let view = list.find((v) => v.emoji === r.emoji);
+      if (!view) list.push((view = { emoji: r.emoji, users: [] }));
+      view.users.push({ id: r.user_id, name: r.name ?? `Player #${r.user_id}` });
+    }
+    return out;
+  }
+
+  /** Adds (`on`) or removes the caller's reaction; returns the message's reactions either way. */
+  async react(c: Caller, id: string, messageId: number, emoji: unknown, on: boolean): Promise<Res<ReactionsUpdate>> {
+    const room = this.roomCtx(id);
+    if (!room || !receives(room, c)) return fail(404, 'Room not found');
+    if (!(REACTIONS as readonly unknown[]).includes(emoji)) return fail(400, 'Unknown reaction');
+    const m = this.rows<{ id: number }>('SELECT id FROM messages WHERE id = ? AND room_id = ? AND deleted = 0', messageId, id)[0];
+    if (!m) return fail(404, 'Message not found');
+    const changed = on
+      ? this.sql.exec('INSERT OR IGNORE INTO reactions(message_id, room_id, user_id, emoji, ts) VALUES (?, ?, ?, ?, ?)', messageId, id, c.id, emoji as string, Date.now()).rowsWritten
+      : this.sql.exec('DELETE FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?', messageId, c.id, emoji as string).rowsWritten;
+    const update: ReactionsUpdate = { roomId: id, id: messageId, reactions: this.reactionsIn(messageId, messageId).get(messageId) ?? [] };
+    if (changed) {
+      this.sql.exec('UPDATE messages SET react_seq = (SELECT COALESCE(MAX(react_seq), 0) + 1 FROM messages) WHERE id = ?', messageId);
+      this.emit((s) => receives(room, s.caller), { t: 'reactions', ...update });
+    }
+    return ok(update);
   }
 
   // ---------------------------------------------------------------- HTTP API
@@ -593,7 +648,7 @@ export class Hub extends DurableObject<Env> {
     if (p[0] !== 'v1') return fail(404, 'Not found');
     if (this.isBanned(c.id)) return fail(403, 'You are banned from Torn Rooms');
     if (m === 'GET' && !this.allow(`read:${c.id}`, LIMITS.readsPerMinute, 60_000)) return fail(429, 'Slow down');
-    if (p[1] === 'poll' && p.length === 2 && m === 'GET') return this.poll(c, query.open ?? '', query.after);
+    if (p[1] === 'poll' && p.length === 2 && m === 'GET') return this.poll(c, query.open ?? '', query.after, query.reactionsAfter);
     // Typing pings are frequent and touch no storage: their own limit, outside the write budget.
     if (p[1] === 'rooms' && p.length === 4 && p[3] === 'typing' && m === 'POST') {
       if (!this.allow(`typing:${c.id}`, LIMITS.typingPerMinute, 60_000)) return fail(429, 'Slow down');
@@ -625,6 +680,7 @@ export class Hub extends DurableObject<Env> {
         if (p[3] === 'grants' && m === 'POST') return this.addGrant(c, id, body.kind, body.id, body.label);
       }
       if (p.length === 5 && p[3] === 'messages' && m === 'DELETE') return this.deleteMessage(c, id, Number(p[4]));
+      if (p.length === 6 && p[3] === 'messages' && p[5] === 'reactions' && m === 'POST') return this.react(c, id, Number(p[4]), body.emoji, body.on !== false);
       if (p.length === 5 && p[3] === 'admins') {
         if (m === 'POST') return this.setAdmin(c, id, Number(p[4]), true);
         if (m === 'DELETE') return this.setAdmin(c, id, Number(p[4]), false);
@@ -654,8 +710,20 @@ export class Hub extends DurableObject<Env> {
   }
 
   /** The stream as a request: see PollResponse. */
-  private async poll(c: Caller, open: string, after: string | undefined): Promise<Res<PollResponse>> {
+  private async poll(c: Caller, open: string, after: string | undefined, reactionsAfter: string | undefined): Promise<Res<PollResponse>> {
     const cursor = this.rows<{ n: number }>('SELECT COALESCE(MAX(id), 0) AS n FROM messages')[0].n;
+    const reactionCursor = this.rows<{ n: number }>('SELECT COALESCE(MAX(react_seq), 0) AS n FROM messages')[0].n;
+    const readable = (r: MessageRow) => {
+      const room = this.roomCtx(r.room_id);
+      return room !== undefined && receives(room, c);
+    };
+    const rsince = Number(reactionsAfter);
+    const reactions: ReactionsUpdate[] =
+      reactionsAfter !== undefined && Number.isInteger(rsince) && rsince >= 0
+        ? this.withReactions(
+            this.rows<MessageRow>('SELECT * FROM messages WHERE react_seq > ? AND react_seq <= ? AND deleted = 0 ORDER BY react_seq LIMIT 500', rsince, reactionCursor).filter(readable),
+          ).map((m) => ({ roomId: m.roomId, id: m.id, reactions: m.reactions }))
+        : [];
     const since = Number(after);
     const typing: Record<string, TypingUser[]> = {};
     for (const id of [...this.typing.keys()]) {
@@ -663,15 +731,10 @@ export class Hub extends DurableObject<Env> {
       const users = room && receives(room, c) ? this.typers(id).filter((u) => u.userId !== c.id) : [];
       if (users.length) typing[id] = users;
     }
-    if (after === undefined || !Number.isInteger(since) || since < 0) return ok({ ...(await this.snapshot(c, open)), messages: [], cursor, typing });
+    if (after === undefined || !Number.isInteger(since) || since < 0) return ok({ ...(await this.snapshot(c, open)), messages: [], cursor, reactions, reactionCursor, typing });
     const { rooms } = await this.snapshot(c, '');
-    const messages = this.rows<MessageRow>('SELECT * FROM messages WHERE id > ? AND id <= ? AND deleted = 0 ORDER BY id LIMIT 500', since, cursor)
-      .filter((r) => {
-        const room = this.roomCtx(r.room_id);
-        return room !== undefined && receives(room, c);
-      })
-      .map(toMessage);
-    return ok({ rooms, history: {}, messages, cursor, typing });
+    const messages = this.withReactions(this.rows<MessageRow>('SELECT * FROM messages WHERE id > ? AND id <= ? AND deleted = 0 ORDER BY id LIMIT 500', since, cursor).filter(readable));
+    return ok({ rooms, history: {}, messages, cursor, reactions, reactionCursor, typing });
   }
 
   /** Logins per client IP: each one costs two Torn API calls. */

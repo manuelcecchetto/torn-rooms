@@ -22,7 +22,9 @@ with your own Torn API key (Public access is enough).
 
 What you get: rooms with their own icon and color, shared with players or whole factions; unread
 counters on the chat bar; members, invites, admins and bans per room; an optional `[TAG]` before
-sender names (handy in alliance rooms); profile pictures only for players who opt in. Close a room
+sender names (handy in alliance rooms); profile pictures only for players who opt in. Hovering a message shows its time and a
+reaction bubble with six emojis; reactions sit in the bubble's bottom right corner, hovering one lists who
+reacted with it, and a click on one adds or takes back yours. Close a room
 with the X in its header, like a private chat; it stays in the **Rooms** list, and a new message
 brings its button back.
 
@@ -78,8 +80,8 @@ brings its button back.
 
 | | |
 |---|---|
-| Data storage | Player ID, name, faction ID and tag; profile picture URL only with the player's consent (off by default, changeable in Settings, revoking removes it from past messages); messages posted, with your name and faction tag at the time (last 5,000 per room); room membership. |
-| Data sharing | Name, avatar and messages are visible to members of the rooms you post in. Nothing is sold or shared elsewhere. |
+| Data storage | Player ID, name, faction ID and tag; profile picture URL only with the player's consent (off by default, changeable in Settings, revoking removes it from past messages); messages posted, with your name and faction tag at the time (last 5,000 per room); reactions you add to messages (removed with the message); room membership. |
+| Data sharing | Name, avatar, messages and reactions are visible to members of the rooms you post in. Nothing is sold or shared elsewhere. |
 | Purpose of use | Proving who you are and which faction you are in, for room access. |
 | Key storage & sharing | Kept in Tampermonkey storage on your device. Sent to the Torn Rooms server only to log in (every 6 hours); never stored there or shared. |
 | Key access level | Public. |

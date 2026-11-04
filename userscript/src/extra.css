@@ -167,18 +167,293 @@
 .tr-panel .tr_root___yvwp3 {
   position: relative;
 }
-.tr-del {
+/* Hovering a message (tracked in room.ts, with a safe triangle to reach them): its time, the reaction bubble and Delete, beside the message (the free side:
+   right of others' messages, left of ours), or over its top corner when the message is too wide.
+   Colors follow Torn's light/dark switch (var(--chat-theme-dark, a) var(--chat-theme-light, b)). */
+.tr-panel .tr_root___EP_Dq:focus,
+.tr-panel .tr_root___yvwp3:focus {
+  outline: none;
+}
+.tr-tools {
   position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 12px;
-  height: 12px;
+  top: 2px;
+  left: calc(100% + 4px);
+  z-index: 1;
+  /* hidden with display, not visibility: hidden tools beside wide lines would still make the list scroll sideways */
   display: none;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 3px 0 7px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid var(--chat-theme-dark, #444) var(--chat-theme-light, #ddd);
+  background: var(--chat-theme-dark, #222) var(--chat-theme-light, #fff);
+  color: var(--chat-theme-dark, #999) var(--chat-theme-light, #777);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.tr-panel .tr_scrollWrapper___DmIrl {
+  overflow-x: hidden;
+}
+/* The gap around the tools counts as the tools, so a pointer resting in it keeps them. */
+.tr-tools::before {
+  content: '';
+  position: absolute;
+  inset: -4px -6px;
+  z-index: -1;
+}
+.tr_self___HgXOK > .tr-tools {
+  left: auto;
+  right: calc(100% + 4px);
+}
+.tr-tools-over > .tr-tools {
+  top: -12px;
+  left: auto;
+  right: 4px;
+}
+.tr_self___HgXOK.tr-tools-over > .tr-tools {
+  right: auto;
+  left: 4px;
+}
+.tr-hover > .tr-tools,
+.tr-picking > .tr-tools {
+  display: flex;
+}
+@media (hover: none) {
+  .tr_root___EP_Dq:focus-within > .tr-tools,
+  .tr_root___yvwp3:focus-within > .tr-tools {
+    display: flex;
+  }
+}
+.tr-tools-time {
+  margin-right: 2px;
+}
+.tr-tools-react {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
   cursor: pointer;
 }
-.tr_root___EP_Dq:hover .tr-del,
-.tr_root___yvwp3:hover .tr-del {
-  display: block;
+.tr-tools-react:hover,
+.tr-picking .tr-tools-react {
+  color: var(--chat-theme-dark, #fff) var(--chat-theme-light, #333);
+  background: var(--chat-theme-dark, #444) var(--chat-theme-light, #eee);
+}
+.tr-tools-del {
+  width: 10px;
+  height: 10px;
+  padding: 0 3px;
+  cursor: pointer;
+  filter: none;
+}
+.tr-tools-del stop {
+  stop-color: currentColor;
+}
+.tr-tools-del:hover {
+  color: var(--chat-theme-dark, #fff) var(--chat-theme-light, #333);
+}
+.tr-picker {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 18px;
+  border: 1px solid var(--chat-theme-dark, #555) var(--chat-theme-light, #ccc);
+  background: var(--chat-theme-dark, #222) var(--chat-theme-light, #fff);
+}
+.tr-pick {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  font-size: 18px;
+  line-height: 30px;
+  cursor: pointer;
+  transition: transform 80ms linear;
+}
+.tr-pick:hover {
+  background: var(--chat-theme-dark, #444) var(--chat-theme-light, #eee);
+  transform: scale(1.15);
+}
+.tr-pick-on {
+  background: var(--chat-theme-dark, #2c4a63) var(--chat-theme-light, #dbeafa);
+}
+/* Reactions live in the message's bubble, bottom right: the bubble wraps, so they follow the text on
+   its line when there is room and get a line of their own (still at the right) when there is not. */
+.tr-panel .tr_root___EP_Dq,
+.tr-panel .tr_root___yvwp3 {
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.tr-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px;
+  margin: 3px 0 -1px auto;
+  padding-left: 6px;
+}
+.tr-reactions:empty {
+  display: none;
+}
+.tr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: rgba(127, 127, 127, 0.16);
+  color: var(--chat-theme-dark, #ddd) var(--chat-theme-light, #444);
+  font: bold 11px Arial, sans-serif;
+  cursor: pointer;
+}
+.tr_self___HgXOK .tr-chip {
+  background: rgba(255, 255, 255, 0.14);
+  color: #eee;
+}
+.tr-chip:disabled {
+  cursor: default;
+}
+.tr-chip:not(:disabled):hover {
+  border-color: rgba(127, 127, 127, 0.5);
+}
+.tr-chip.tr-chip-on {
+  border-color: #4a90c8;
+  background: rgba(74, 144, 200, 0.22);
+  color: var(--chat-theme-dark, #a5d8ff) var(--chat-theme-light, #1c6aa8);
+}
+.tr_self___HgXOK .tr-chip.tr-chip-on {
+  color: #a5d8ff;
+}
+/* Who reacted with one emoji, while the pointer is on its reaction. */
+.tr-who {
+  position: absolute;
+  z-index: 3;
+  min-width: 60px;
+  max-width: 180px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--chat-theme-dark, #555) var(--chat-theme-light, #ccc);
+  background: var(--chat-theme-dark, #111) var(--chat-theme-light, #fff);
+  color: var(--chat-theme-dark, #ddd) var(--chat-theme-light, #333);
+  font-size: 11px;
+  line-height: 15px;
+  pointer-events: none;
+}
+.tr-who > div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tr-who-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 2px;
+  font-weight: bold;
+}
+.tr-who-emoji {
+  font-size: 14px;
+}
+.tr-who-more {
+  opacity: 0.7;
+}
+.tr-chip-emoji {
+  font-size: 13px;
+  font-weight: normal;
+}
+
+/* A reaction going in: the chip bumps and its emoji plays its own animation. */
+.tr-chip-emoji {
+  display: inline-block;
+}
+.tr-chip-pop {
+  animation: tr-chip-bump 300ms ease-out;
+}
+.tr-chip-pop .tr-chip-emoji {
+  animation: 600ms ease-out tr-react-pop;
+}
+.tr-chip-pop .tr-chip-emoji[data-anim='fire'] {
+  animation: 900ms ease-out tr-react-fire;
+}
+.tr-chip-pop .tr-chip-emoji[data-anim='heart'] {
+  animation: 800ms ease-in-out tr-react-heart;
+}
+.tr-chip-pop .tr-chip-emoji[data-anim='thumb'] {
+  animation: 650ms ease-out tr-react-thumb;
+}
+.tr-chip-pop .tr-chip-emoji[data-anim='laugh'] {
+  animation: 750ms ease-in-out tr-react-laugh;
+}
+.tr-chip-pop .tr-chip-emoji[data-anim='sad'] {
+  animation: 900ms ease-in-out tr-react-sad;
+}
+@keyframes tr-chip-bump {
+  40% { transform: scale(1.12); }
+}
+@keyframes tr-react-pop {
+  0% { transform: scale(0.3); }
+  45% { transform: scale(1.6) translateY(-3px); }
+  70% { transform: scale(0.9); }
+}
+/* Flickers and pulses, glowing like a flame. */
+@keyframes tr-react-fire {
+  0% { transform: scale(0.6) translateY(2px); filter: none; }
+  20% { transform: scale(1.55) translateY(-3px) rotate(-6deg); filter: drop-shadow(0 0 4px #ff7a00) drop-shadow(0 -2px 3px #ffd000); }
+  35% { transform: scale(1.2) rotate(5deg); filter: drop-shadow(0 0 2px #ff7a00); }
+  50% { transform: scale(1.45) translateY(-2px) rotate(-4deg); filter: drop-shadow(0 0 5px #ff5a00) drop-shadow(0 -2px 3px #ffd000); }
+  65% { transform: scale(1.15) rotate(3deg); filter: drop-shadow(0 0 2px #ff7a00); }
+  80% { transform: scale(1.3) translateY(-1px); filter: drop-shadow(0 0 3px #ff7a00); }
+  100% { transform: none; filter: none; }
+}
+/* Two beats, like a heart. */
+@keyframes tr-react-heart {
+  0%, 30%, 60%, 100% { transform: scale(1); }
+  15% { transform: scale(1.5); filter: drop-shadow(0 0 3px #ff3b5c); }
+  45% { transform: scale(1.35); filter: drop-shadow(0 0 2px #ff3b5c); }
+}
+@keyframes tr-react-thumb {
+  0% { transform: scale(0.5); }
+  35% { transform: scale(1.5) translateY(-4px) rotate(-22deg); }
+  60% { transform: scale(1.1) rotate(8deg); }
+  80% { transform: rotate(-4deg); }
+}
+/* Shakes with laughter. */
+@keyframes tr-react-laugh {
+  0% { transform: scale(0.6); }
+  15% { transform: scale(1.45) rotate(-14deg); }
+  30% { transform: scale(1.35) rotate(14deg); }
+  45% { transform: scale(1.3) rotate(-12deg); }
+  60% { transform: scale(1.2) rotate(10deg); }
+  75% { transform: scale(1.1) rotate(-5deg); }
+}
+/* Sinks and droops. */
+@keyframes tr-react-sad {
+  0% { transform: scale(0.6) translateY(-4px); }
+  30% { transform: scale(1.35) translateY(-2px); }
+  60% { transform: scale(1.1) translateY(3px) rotate(-8deg); }
+  80% { transform: translateY(1px) rotate(-4deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tr-chip-pop,
+  .tr-chip-pop .tr-chip-emoji {
+    animation: none !important;
+  }
 }
 .tr-panel .tr_root___PCyAT,
 .tr-panel .tr_root___XpFMX {

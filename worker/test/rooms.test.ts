@@ -416,3 +416,54 @@ describe('typing', () => {
     expect((await call(owner, 'POST', `/v1/rooms/${room.id}/messages`, { text: 'still fine' })).status).toBe(200);
   });
 });
+
+describe('reactions', () => {
+  it('members toggle the fixed reactions; streams and polls carry the change, outsiders cannot react', async () => {
+    const owner = await login(5800, 5801);
+    const member = await login(5802, 5801);
+    const outsider = await login(5804, 0);
+    const room = await createRoom(owner, { name: 'Reacts' });
+    await call(owner, 'POST', `/v1/rooms/${room.id}/grants`, { kind: 'faction', id: 5801, label: 'Us' });
+    await call(member, 'POST', `/v1/rooms/${room.id}/join`);
+    const msg = (await call<MessageView>(owner, 'POST', `/v1/rooms/${room.id}/messages`, { text: 'we won' })).body;
+    expect(msg.reactions).toEqual([]);
+    const first = (await call<PollResponse>(member, 'GET', `/v1/poll?open=${room.id}`)).body;
+    expect(first.reactions).toEqual([]);
+    const o = await stream(owner, [room.id]);
+    await tick();
+    o.events.shift();
+
+    const path = `/v1/rooms/${room.id}/messages/${msg.id}/reactions`;
+    expect((await call(member, 'POST', path, { emoji: '🔥' })).status).toBe(200);
+    expect((await call(owner, 'POST', path, { emoji: '👍' })).status).toBe(200);
+    const both = await call(member, 'POST', path, { emoji: '👍', on: true });
+    const expected = [
+      { emoji: '🔥', users: [{ id: 5802, name: 'Player5802' }] },
+      { emoji: '👍', users: [{ id: 5800, name: 'Player5800' }, { id: 5802, name: 'Player5802' }] },
+    ];
+    expect(both.body).toEqual({ roomId: room.id, id: msg.id, reactions: expected });
+    // Adding twice changes nothing; anything outside the picker is refused.
+    expect((await call(member, 'POST', path, { emoji: '👍' })).body.reactions).toEqual(expected);
+    expect((await call(member, 'POST', path, { emoji: '💩' })).status).toBe(400);
+    expect((await call(outsider, 'POST', path, { emoji: '👍' })).status).toBe(404);
+    await tick();
+    expect(o.events.filter((e) => e.t === 'reactions').length).toBe(3);
+    expect(o.events.at(-1)).toEqual({ t: 'reactions', roomId: room.id, id: msg.id, reactions: expected });
+
+    const history = (await call<{ messages: MessageView[] }>(owner, 'GET', `/v1/rooms/${room.id}/messages`)).body.messages;
+    expect(history.find((m) => m.id === msg.id)?.reactions).toEqual(expected);
+    const polled = (await call<PollResponse>(member, 'GET', `/v1/poll?open=&after=${first.cursor}&reactionsAfter=${first.reactionCursor}`)).body;
+    expect(polled.reactions).toEqual([{ roomId: room.id, id: msg.id, reactions: expected }]);
+    const outsiderPoll = (await call<PollResponse>(outsider, 'GET', `/v1/poll?open=&after=0&reactionsAfter=${first.reactionCursor}`)).body;
+    expect(outsiderPoll.reactions).toEqual([]);
+
+    const off = await call(owner, 'POST', path, { emoji: '👍', on: false });
+    expect(off.body.reactions[1]).toEqual({ emoji: '👍', users: [{ id: 5802, name: 'Player5802' }] });
+    const again = (await call<PollResponse>(member, 'GET', `/v1/poll?open=&after=${polled.cursor}&reactionsAfter=${polled.reactionCursor}`)).body;
+    expect(again.reactions.map((u) => u.reactions[1].users.length)).toEqual([1]);
+
+    await call(owner, 'DELETE', `/v1/rooms/${room.id}/messages/${msg.id}`);
+    expect((await call(member, 'POST', path, { emoji: '👍' })).status).toBe(404);
+    await o.close();
+  });
+});

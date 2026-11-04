@@ -26,6 +26,24 @@ export interface MessageView {
   factionTag: string | null;
   text: string;
   ts: number;
+  /** In the order they were first used. */
+  reactions: ReactionView[];
+}
+
+/** The reactions a message can get: the picker behind the bubble on a hovered message. */
+export const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'] as const;
+
+/** One emoji on a message and who reacted with it, in the order they did. */
+export interface ReactionView {
+  emoji: string;
+  users: { id: number; name: string }[];
+}
+
+/** A message's reactions after a change. */
+export interface ReactionsUpdate {
+  roomId: string;
+  id: number;
+  reactions: ReactionView[];
 }
 
 export interface RoomView {
@@ -98,13 +116,17 @@ export interface AuthResponse {
 /**
  * GET /v1/poll, for clients that cannot read a stream (Torn PDA returns a response only once it is
  * complete). Without `after` it is the hello snapshot; with it, the room list plus the messages after
- * that cursor that the stream would have delivered. Pass `cursor` as `after` next time.
+ * that cursor that the stream would have delivered. Pass `cursor` as `after` next time, and
+ * `reactionCursor` as `reactionsAfter` for the reactions changed since.
  */
 export interface PollResponse {
   rooms: RoomView[];
   history: Record<string, MessageView[]>;
   messages: MessageView[];
   cursor: number;
+  /** messages whose reactions changed after `reactionsAfter` (none without it) */
+  reactions: ReactionsUpdate[];
+  reactionCursor: number;
   /** who is typing in the rooms the client receives, by room */
   typing: Record<string, TypingUser[]>;
 }
@@ -121,6 +143,7 @@ export type ServerEvent =
   | { t: 'hello'; rooms: RoomView[]; history: Record<string, MessageView[]> }
   | { t: 'msg'; msg: MessageView }
   | { t: 'msg_deleted'; roomId: string; id: number }
+  | ({ t: 'reactions' } & ReactionsUpdate)
   /** everyone typing in the room now */
   | { t: 'typing'; roomId: string; users: TypingUser[] }
   | { t: 'rooms_changed' };

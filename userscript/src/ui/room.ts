@@ -1,9 +1,9 @@
 // A room's chat panel: the same markup as Torn's faction/global panels.
-import { LIMITS, type AccessView, type MessageView, type RoomView } from '../../../shared/protocol';
+import { LIMITS, REACTIONS, type AccessView, type MessageView, type ReactionView, type RoomView } from '../../../shared/protocol';
 import { api } from '../api';
 import { ago, cx, fill, h, icon, linkify, retryIcon, roomIcon, tct, tctDay, text, type Child } from '../dom';
 import type { IconName } from '../generated/icons';
-import { closeRoom, deleteRoom, discard, join, leave, loadHistory, markRead, onRoomMessage, refreshRooms, retry, send, senderName, state, toggleRoom, type PendingMessage } from '../store';
+import { closeRoom, deleteRoom, discard, join, leave, loadHistory, markRead, onReactions, onRoomMessage, react, refreshRooms, retry, send, senderName, state, toggleRoom, type PendingMessage } from '../store';
 import { backView, info, parseTornId, setting, textInput, tornBtn, warning } from './forms';
 import { roomForm } from './roomForm';
 import defaultAvatar from '../../assets/avatar-default.jpg';
@@ -38,6 +38,20 @@ export class RoomPanel {
   private menuOpen = false;
   private loading = false;
   private unsub: () => void;
+  private unsubReactions: () => void;
+  /** Each shown message's reactions row, by message id, to redraw just that row when they change. */
+  private reactionRows = new Map<number, HTMLElement>();
+  /** The open emoji picker: its message and how to close it. */
+  private picker: { id: number; close: () => void } | null = null;
+  /** Each confirmed message's hover tools and how to place them. */
+  private toolsOf = new WeakMap<HTMLElement, { tools: HTMLElement; place: () => void }>();
+  /** The message showing its tools under the pointer. */
+  private hovered: HTMLElement | null = null;
+  /** Where the pointer left the hovered message: while it heads from there to the tools, other messages keep out. */
+  private exit: { x: number; y: number; at: number; dist: number } | null = null;
+  private hoverTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Who reacted with one emoji, shown while the pointer is on its reaction. */
+  private who: { id: number; emoji: string; el: HTMLElement } | null = null;
   private footerTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(readonly id: string) {
@@ -75,11 +89,14 @@ export class RoomPanel {
     follow.observe(this.pendingList);
     follow.observe(this.footer);
     this.scroller.addEventListener('scroll', () => {
+      this.closePicker();
       if (this.scroller.clientHeight) this.pinned = this.atBottom();
       if (this.pinned && this.unseen) this.setUnseen(0);
       if (this.scroller.scrollTop < 40 && state.more.get(id) && !this.loading) this.loadOlder();
       if (this.atBottom()) markRead(id);
     });
+    this.scroller.addEventListener('pointermove', (e) => this.trackHover(e));
+    this.scroller.addEventListener('pointerleave', (e) => e.pointerType !== 'touch' && this.setHovered(null));
     this.content.append(h('div', { c: 'root___v2RvA' }, this.scroller), this.composerSlot);
     this.el.append(this.header, this.content);
     this.unsub = onRoomMessage((roomId, msg) => {
@@ -90,6 +107,17 @@ export class RoomPanel {
       if (msg) this.appendMessage(msg, mine);
       else this.renderMessages();
     });
+    this.unsubReactions = onReactions((roomId, msgId) => {
+      const row = roomId === id && this.reactionRows.get(msgId);
+      const m = row && state.messages.get(id)?.find((x) => x.id === msgId);
+      if (row && m) this.fillReactions(row, m, true);
+      // The chips were redrawn: keep the list on the one under the pointer, or drop it with its reaction.
+      if (row && m && this.who?.id === msgId) {
+        const chip = [...row.children].find((c) => (c as HTMLElement).dataset.emoji === this.who!.emoji) as HTMLElement | undefined;
+        if (chip) this.showWho(m, this.who.emoji, chip);
+        else this.hideWho();
+      }
+    });
     this.update();
     if (!state.messages.has(id) && state.rooms.get(id)?.joined) loadHistory(id).then(() => this.renderMessages(true), () => {});
     else this.renderMessages(true);
@@ -97,6 +125,10 @@ export class RoomPanel {
 
   destroy(): void {
     this.unsub();
+    this.unsubReactions();
+    this.closePicker();
+    this.hideWho();
+    clearTimeout(this.hoverTimer);
     clearTimeout(this.footerTimer);
     this.el.remove();
   }
@@ -254,6 +286,10 @@ export class RoomPanel {
   renderMessages(forceBottom = false): void {
     const stick = forceBottom || this.pinned || this.atBottom();
     const msgs = state.messages.get(this.id) ?? [];
+    this.closePicker();
+    this.hideWho();
+    this.setHovered(null);
+    this.reactionRows.clear();
     const items: HTMLElement[] = [];
     msgs.forEach((m, i) => items.push(...this.rows(m, msgs[i - 1], i < msgs.length - 1)));
     this.list.replaceChildren(...items);
@@ -298,7 +334,7 @@ export class RoomPanel {
     let prev = (state.messages.get(this.id) ?? []).at(-1);
     const rows: HTMLElement[] = [];
     pending.forEach((p, i) => {
-      const view: MessageView = { id: 0, roomId: p.roomId, userId: me?.id ?? 0, name: me?.name ?? '', avatar: null, factionTag: me?.factionTag ?? null, text: p.text, ts: p.ts };
+      const view: MessageView = { id: 0, roomId: p.roomId, userId: me?.id ?? 0, name: me?.name ?? '', avatar: null, factionTag: me?.factionTag ?? null, text: p.text, ts: p.ts, reactions: [] };
       rows.push(...this.rows(view, prev, i < pending.length - 1, p));
       prev = view;
     });
@@ -334,24 +370,27 @@ export class RoomPanel {
       : null;
     const sender = text('link2', `hrefLink___9O1GI ${classic ? 'sender___wV_Ae' : 'sender___WTwPl'} regular___hyk3H clickable___efRv1`, { href: profile }, `${senderName(this.room, m)}:`);
     const body = h('span', { c: `root___XpplE body___HxuJg ${classic ? 'message___MITZq' : 'message___AI7Nl'}` }, h('span', { c: 'root___RoNAh' }, ...linkify(m.text)));
+    const bubble = h(
+      'div',
+      // Torn's pending style fades a message only when it is not confirmed within half a second.
+      classic
+        ? { c: cx('root___yvwp3', pending && 'pending___aZTtW') }
+        : { c: cx('root___EP_Dq', first && 'first___icNlg', self && 'self___HgXOK', pending && 'pending___aZTtW') },
+      classic
+        ? h('div', { c: 'box___cZJah' }, h('span', {}, avatar, sender), body)
+        : h('div', { c: 'box___eWW6m' }, h('span', { c: 'senderContainer___aAlZ2' }, avatar, sender), body),
+    );
+    if (!pending) {
+      // In the bubble's bottom right corner: after the text when the line has room, else on a line of their own.
+      const reactions = h('div', { c: 'tr-reactions' });
+      this.reactionRows.set(m.id, reactions);
+      this.fillReactions(reactions, m);
+      bubble.append(reactions, this.tools(m, bubble, canDelete));
+    }
     return h(
       'div',
       { c: cx('virtualItem___eIUjo', classic && 'classic___S4LnO'), style: `margin-bottom: ${gap}px;` },
-      h(
-        'div',
-        // Torn's pending style fades a message only when it is not confirmed within half a second.
-        classic
-          ? { c: cx('root___yvwp3', pending && 'pending___aZTtW'), title: tct(m.ts) }
-          : { c: cx('root___EP_Dq', first && 'first___icNlg', self && 'self___HgXOK', pending && 'pending___aZTtW'), title: tct(m.ts) },
-        classic
-          ? h('div', { c: 'box___cZJah' }, h('span', {}, avatar, sender), body)
-          : h('div', { c: 'box___eWW6m' }, h('span', { c: 'senderContainer___aAlZ2' }, avatar, sender), body),
-        canDelete
-          ? withClick(icon('closeChat', 'tr-del', 'Delete message'), () => {
-              if (confirm('Delete this message for everyone?')) api('DELETE', `/v1/rooms/${this.id}/messages/${m.id}`).catch((e) => this.flash(e.message));
-            })
-          : null,
-      ),
+      bubble,
       pending?.failed
         ? h(
             'div',
@@ -362,6 +401,215 @@ export class RoomPanel {
           )
         : null,
     );
+  }
+
+  /**
+   * What hovering a message shows: its time, the reaction bubble, and Delete when allowed. Beside the
+   * message when there is room, else over its top corner; a tap shows it on touch screens.
+   */
+  private tools(m: MessageView, bubble: HTMLElement, canDelete: boolean): HTMLElement {
+    const reactBtn = this.room?.joined
+      ? h('button', { type: 'button', c: 'tr-tools-react', title: 'React', 'aria-label': 'React' }, smileyIcon())
+      : null;
+    reactBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.picker?.id === m.id) this.closePicker();
+      else this.openPicker(m, bubble, reactBtn);
+    });
+    const tools = h(
+      'div',
+      { c: 'tr-tools' },
+      h('span', { c: 'tr-tools-time' }, this.stamp(m.ts)),
+      reactBtn,
+      canDelete
+        ? withClick(icon('closeChat', 'tr-tools-del', 'Delete message'), () => {
+            if (confirm('Delete this message for everyone?')) api('DELETE', `/v1/rooms/${this.id}/messages/${m.id}`).catch((e) => this.flash(e.message));
+          })
+        : null,
+    );
+    bubble.tabIndex = -1;
+    const place = () => {
+      const b = bubble.getBoundingClientRect();
+      const s = this.scroller.getBoundingClientRect();
+      const free = bubble.classList.contains('tr_self___HgXOK') ? b.left - s.left : s.left + this.scroller.clientWidth - b.right;
+      bubble.classList.toggle('tr-tools-over', free < tools.offsetWidth + 8);
+    };
+    bubble.addEventListener('focusin', place);
+    this.toolsOf.set(bubble, { tools, place });
+    return tools;
+  }
+
+  /**
+   * Hover with a safe triangle, as in menus: after the pointer leaves the hovered message, it keeps
+   * its tools while it moves inside the triangle from where it left to the tools, or keeps getting
+   * closer to them on a curved path (for AIM_MS at most), so crossing a gap or a neighbouring message
+   * on the way does not hide them. Moving away from them hands the hover over at once.
+   */
+  private trackHover(e: PointerEvent): void {
+    if (e.pointerType === 'touch') return;
+    const bubble = this.bubbleAt(e.target as Element | null);
+    if (bubble === this.hovered) {
+      this.exit = null;
+      clearTimeout(this.hoverTimer);
+      return;
+    }
+    const tools = this.hovered && this.toolsOf.get(this.hovered)?.tools;
+    if (tools) {
+      const now = performance.now();
+      const r = tools.getBoundingClientRect();
+      const dist = Math.hypot(Math.max(r.left - e.clientX, 0, e.clientX - r.right), Math.max(r.top - e.clientY, 0, e.clientY - r.bottom));
+      this.exit ??= { x: e.clientX, y: e.clientY, at: now, dist };
+      const closer = dist <= this.exit.dist + 1;
+      this.exit.dist = Math.min(this.exit.dist, dist);
+      if (now - this.exit.at < AIM_MS && (closer || towards(this.exit, r, e.clientX, e.clientY))) {
+        // Still on the way; if the pointer stops short of the tools, the message under it takes over.
+        const { clientX: x, clientY: y } = e;
+        clearTimeout(this.hoverTimer);
+        this.hoverTimer = setTimeout(() => this.setHovered(this.bubbleAt(document.elementFromPoint(x, y))), AIM_MS);
+        return;
+      }
+    }
+    this.setHovered(bubble);
+  }
+
+  /** The message whose row is under the pointer: its whole width counts, so the tools beside a message are inside its hover. */
+  private bubbleAt(el: Element | null): HTMLElement | null {
+    const item = el?.closest('.tr_virtualItem___eIUjo');
+    const bubble = item?.querySelector<HTMLElement>(':scope > .tr_root___EP_Dq, :scope > .tr_root___yvwp3') ?? null;
+    return bubble && this.toolsOf.has(bubble) && this.list.contains(bubble) ? bubble : null;
+  }
+
+  private setHovered(bubble: HTMLElement | null): void {
+    clearTimeout(this.hoverTimer);
+    this.exit = null;
+    if (bubble === this.hovered) return;
+    this.hovered?.classList.remove('tr-hover');
+    this.hovered = bubble;
+    if (!bubble) return;
+    bubble.classList.add('tr-hover');
+    this.toolsOf.get(bubble)?.place();
+  }
+
+  private openPicker(m: MessageView, bubble: HTMLElement, anchor: HTMLElement): void {
+    this.closePicker();
+    const mine = new Set((m.reactions ?? []).filter((r) => r.users.some((u) => u.id === state.me?.id)).map((r) => r.emoji));
+    const picker = h(
+      'div',
+      { c: 'tr-picker', role: 'menu' },
+      REACTIONS.map((emoji) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            role: 'menuitem',
+            c: cx('tr-pick', mine.has(emoji) && 'tr-pick-on'),
+            on: {
+              click: (e: Event) => {
+                e.stopPropagation();
+                this.closePicker();
+                react(this.id, m.id, emoji).catch((err) => this.flash(err.message));
+              },
+            },
+          },
+          emoji,
+        ),
+      ),
+    );
+    this.el.append(picker);
+    bubble.classList.add('tr-picking');
+    // Above the bubble button, or below it when the header is in the way; inside the panel.
+    const a = anchor.getBoundingClientRect();
+    const p = this.el.getBoundingClientRect();
+    const top = this.header.getBoundingClientRect().bottom;
+    const left = Math.min(Math.max(4, a.left + a.width / 2 - picker.offsetWidth / 2 - p.left), p.width - picker.offsetWidth - 4);
+    picker.style.left = `${left}px`;
+    picker.style.top = `${a.top - picker.offsetHeight - 4 >= top ? a.top - p.top - picker.offsetHeight - 4 : a.bottom - p.top + 4}px`;
+    const outside = (e: Event) => {
+      if (!picker.contains(e.target as Node) && !anchor.contains(e.target as Node)) this.closePicker();
+    };
+    const escape = (e: KeyboardEvent) => e.key === 'Escape' && this.closePicker();
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', escape, true);
+    this.picker = {
+      id: m.id,
+      close: () => {
+        document.removeEventListener('pointerdown', outside, true);
+        document.removeEventListener('keydown', escape, true);
+        bubble.classList.remove('tr-picking');
+        picker.remove();
+      },
+    };
+  }
+
+  private closePicker(): void {
+    this.picker?.close();
+    this.picker = null;
+  }
+
+  /**
+   * A message's reactions: emoji and count, highlighted when one is ours; a click adds or takes
+   * back ours. On a change (`animate`), an emoji that just got a reaction plays its animation.
+   */
+  private fillReactions(row: HTMLElement, m: MessageView, animate = false): void {
+    const joined = !!this.room?.joined;
+    // The server confirming what is already shown changes nothing, and must not restart an animation.
+    const key = JSON.stringify([joined, state.me?.id, (m.reactions ?? []).map((r) => [r.emoji, r.users.map((u) => u.id)])]);
+    if (row.dataset.key === key) return;
+    row.dataset.key = key;
+    const before = new Map([...row.children].map((c) => [(c as HTMLElement).dataset.emoji, Number((c as HTMLElement).dataset.count)]));
+    fill(
+      row,
+      (m.reactions ?? []).map((r) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            c: cx('tr-chip', r.users.some((u) => u.id === state.me?.id) && 'tr-chip-on', animate && r.users.length > (before.get(r.emoji) ?? 0) && 'tr-chip-pop'),
+            'data-emoji': r.emoji,
+            'data-count': r.users.length,
+            'aria-label': `${reactedBy(r)} reacted with ${r.emoji}`,
+            disabled: !joined,
+            on: {
+              click: () => react(this.id, m.id, r.emoji).catch((e) => this.flash(e.message)),
+              pointerenter: (e: PointerEvent) => {
+                const shown = e.pointerType !== 'touch' && state.messages.get(this.id)?.find((x) => x.id === m.id);
+                if (shown) this.showWho(shown, r.emoji, e.currentTarget as HTMLElement);
+              },
+              pointerleave: () => this.who?.id === m.id && this.who.emoji === r.emoji && this.hideWho(),
+            },
+          },
+          h('span', { c: 'tr-chip-emoji', 'data-anim': REACTION_ANIMATIONS[r.emoji] ?? 'pop' }, r.emoji),
+          h('span', { c: 'tr-chip-count' }, r.users.length),
+        ),
+      ),
+    );
+  }
+
+  /** Who reacted with one emoji, above its reaction (below it when the header is in the way). */
+  private showWho(m: MessageView, emoji: string, chip: HTMLElement): void {
+    const reaction = m.reactions?.find((r) => r.emoji === emoji);
+    if (!reaction) return this.hideWho();
+    const el = this.who?.el ?? h('div', { c: 'tr-who', role: 'tooltip' });
+    // Each name on its line, you first; a long list ends in "and N more".
+    const names = reaction.users.map((u) => (u.id === state.me?.id ? 'You' : u.name)).sort((a, b) => (a === 'You' ? -1 : b === 'You' ? 1 : 0));
+    fill(
+      el,
+      h('div', { c: 'tr-who-head' }, h('span', { c: 'tr-who-emoji' }, emoji), `${names.length}`),
+      names.slice(0, WHO_MAX).map((n) => h('div', {}, n)),
+      names.length > WHO_MAX ? h('div', { c: 'tr-who-more' }, `and ${names.length - WHO_MAX} more`) : null,
+    );
+    if (!el.isConnected) this.el.append(el);
+    this.who = { id: m.id, emoji, el };
+    const r = chip.getBoundingClientRect();
+    const p = this.el.getBoundingClientRect();
+    const top = this.header.getBoundingClientRect().bottom;
+    el.style.left = `${Math.min(Math.max(4, r.left + r.width / 2 - p.left - el.offsetWidth / 2), p.width - el.offsetWidth - 4)}px`;
+    el.style.top = `${r.top - el.offsetHeight - 4 >= top ? r.top - p.top - el.offsetHeight - 4 : r.bottom - p.top + 4}px`;
+  }
+
+  private hideWho(): void {
+    this.who?.el.remove();
+    this.who = null;
   }
 
   private footerText = '';
@@ -568,6 +816,50 @@ export class RoomPanel {
     draw();
     return backView('Back to chat', back, '', [body]);
   }
+}
+
+/** Names listed when hovering a reaction before "and N more". */
+const WHO_MAX = 12;
+
+/** Which animation each reaction plays when it goes in (keyframes in extra.css). */
+const REACTION_ANIMATIONS: Record<string, string> = { '👍': 'thumb', '❤️': 'heart', '😂': 'laugh', '😮': 'wow', '😢': 'sad', '🔥': 'fire' };
+
+/** How long the pointer may take from a message to its tools. */
+const AIM_MS = 500;
+
+/** Is (x, y) inside the area between the point the pointer left from and the tools (their convex hull)? The tools count 10px larger, for curved paths. */
+function towards(from: { x: number; y: number }, tools: DOMRect, x: number, y: number): boolean {
+  const r = { left: tools.left - 10, top: tools.top - 10, right: tools.right + 10, bottom: tools.bottom + 10 };
+  if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
+  const corners: [number, number][] = [[r.left, r.top], [r.right, r.top], [r.right, r.bottom], [r.left, r.bottom]];
+  return corners.some((a, i) => inTriangle(x, y, from.x, from.y, a, corners[(i + 1) % 4]));
+}
+
+function inTriangle(x: number, y: number, px: number, py: number, [ax, ay]: [number, number], [bx, by]: [number, number]): boolean {
+  const side = (x1: number, y1: number, x2: number, y2: number) => (x - x2) * (y1 - y2) - (x1 - x2) * (y - y2);
+  const d1 = side(px, py, ax, ay);
+  const d2 = side(ax, ay, bx, by);
+  const d3 = side(bx, by, px, py);
+  return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
+}
+
+/** "You, Ghost and Foxy", at most eight names, then "and N more". */
+function reactedBy(r: ReactionView): string {
+  const names = r.users.map((u) => (u.id === state.me?.id ? 'You' : u.name)).sort((a, b) => (a === 'You' ? -1 : b === 'You' ? 1 : 0));
+  const shown = names.length > 8 ? [...names.slice(0, 8), `${names.length - 8} more`] : names;
+  return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}` : shown[0];
+}
+
+/** The reaction bubble's icon: a smiling face. */
+function smileyIcon(): SVGSVGElement {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  el.setAttribute('viewBox', '0 0 16 16');
+  el.setAttribute('width', '14');
+  el.setAttribute('height', '14');
+  // constant markup, never user content
+  el.innerHTML =
+    '<circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="5.7" cy="6.4" r="1" fill="currentColor"/><circle cx="10.3" cy="6.4" r="1" fill="currentColor"/><path d="M4.9 9.4a3.4 3.4 0 0 0 6.2 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>';
+  return el;
 }
 
 /** Torn's space between message rows: 6px in its classic (no bubbles) style, else 5px. */

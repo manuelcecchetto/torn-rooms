@@ -291,6 +291,7 @@ function pollEvents(openRooms: () => string[], onEvent: (ev: ServerEvent) => voi
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let cursor: number | null = null;
+  let reactionCursor: number | null = null;
   let failures = 0;
   let busy = false;
   const visible = () => document.visibilityState === 'visible';
@@ -315,13 +316,17 @@ function pollEvents(openRooms: () => string[], onEvent: (ev: ServerEvent) => voi
     busy = true;
     try {
       const open = openRooms().map(encodeURIComponent).join(',');
-      const res = await api<PollResponse>('GET', `/v1/poll?open=${open}${cursor === null ? '' : `&after=${cursor}`}`);
+      const after = cursor === null ? '' : `&after=${cursor}`;
+      const reactionsAfter = reactionCursor === null ? '' : `&reactionsAfter=${reactionCursor}`;
+      const res = await api<PollResponse>('GET', `/v1/poll?open=${open}${after}${reactionsAfter}`);
       if (stopped) return;
       // The room list first: it already counts the new messages as unread, so they are not counted twice.
       onEvent({ t: 'hello', rooms: res.rooms, history: res.history });
       for (const msg of res.messages) onEvent({ t: 'msg', msg });
+      for (const update of res.reactions ?? []) onEvent({ t: 'reactions', ...update });
       for (const [roomId, users] of Object.entries(res.typing ?? {})) onEvent({ t: 'typing', roomId, users });
       cursor = res.cursor;
+      reactionCursor = res.reactionCursor ?? null;
       failures = 0;
       onState('live');
     } catch (e) {

@@ -1,5 +1,5 @@
 // Client state: who we are, our rooms, loaded messages, which panels are open.
-import { LIMITS, type Me, type MessageView, type RoomView, type ServerEvent, type TypingUser } from '../../shared/protocol';
+import { LIMITS, type Me, type MessageView, type ReactionsUpdate, type RoomView, type ServerEvent, type TypingUser } from '../../shared/protocol';
 import { api, pageUserId, type ConnState } from './api';
 
 export type DirectoryTab = 'rooms' | 'invites' | 'browse' | 'settings';
@@ -36,6 +36,7 @@ export const state = {
 type Listener = () => void;
 const listeners = new Set<Listener>();
 const messageListeners = new Set<(roomId: string, msg: MessageView | null) => void>();
+const reactionListeners = new Set<(roomId: string, id: number) => void>();
 
 export function subscribe(fn: Listener): () => void {
   listeners.add(fn);
@@ -46,6 +47,12 @@ export function subscribe(fn: Listener): () => void {
 export function onRoomMessage(fn: (roomId: string, msg: MessageView | null) => void): () => void {
   messageListeners.add(fn);
   return () => messageListeners.delete(fn);
+}
+
+/** Room panels redraw one message's reactions from here. */
+export function onReactions(fn: (roomId: string, id: number) => void): () => void {
+  reactionListeners.add(fn);
+  return () => reactionListeners.delete(fn);
 }
 
 let scheduled = false;
@@ -284,6 +291,33 @@ async function post(p: PendingMessage): Promise<void> {
   }
 }
 
+function applyReactions(u: ReactionsUpdate): void {
+  const m = state.messages.get(u.roomId)?.find((x) => x.id === u.id);
+  if (!m) return;
+  m.reactions = u.reactions;
+  for (const fn of reactionListeners) fn(u.roomId, u.id);
+}
+
+/** Adds our reaction, or takes it back when it is already there: shown at once, settled by the server's answer. */
+export async function react(roomId: string, id: number, emoji: string): Promise<void> {
+  const me = state.me;
+  const m = state.messages.get(roomId)?.find((x) => x.id === id);
+  if (!me || !m) return;
+  const before = m.reactions ?? [];
+  const on = !before.some((r) => r.emoji === emoji && r.users.some((u) => u.id === me.id));
+  const next = before
+    .map((r) => (r.emoji !== emoji ? r : { ...r, users: on ? [...r.users, { id: me.id, name: me.name }] : r.users.filter((u) => u.id !== me.id) }))
+    .filter((r) => r.users.length);
+  if (on && !before.some((r) => r.emoji === emoji)) next.push({ emoji, users: [{ id: me.id, name: me.name }] });
+  applyReactions({ roomId, id, reactions: next });
+  try {
+    applyReactions(await api<ReactionsUpdate>('POST', `/v1/rooms/${roomId}/messages/${id}/reactions`, { emoji, on }));
+  } catch (e) {
+    applyReactions({ roomId, id, reactions: before });
+    throw e;
+  }
+}
+
 /** The sender as shown in a room: `[TAG] Name` when the room shows faction tags. */
 export function senderName(room: RoomView | undefined, m: MessageView): string {
   return room?.showFactionTags && m.factionTag ? `[${m.factionTag}] ${m.name}` : m.name;
@@ -393,6 +427,8 @@ export function handleEvent(ev: ServerEvent): void {
     if (list) state.messages.set(ev.roomId, list.filter((m) => m.id !== ev.id));
     for (const fn of messageListeners) fn(ev.roomId, null);
     changed();
+  } else if (ev.t === 'reactions') {
+    applyReactions(ev);
   } else if (ev.t === 'typing') {
     setTyping(ev.roomId, ev.users);
   } else if (ev.t === 'rooms_changed') {
