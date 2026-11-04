@@ -158,7 +158,13 @@
 .tr-act {
   font-size: 11px;
 }
-.tr-panel .tr_root___EP_Dq {
+/* Torn's chat inherits the page's 12px line height; our bubble rows match Torn's at "normal", its
+   classic rows (no bubbles) only at 12px. */
+.tr-root .tr_classic___S4LnO {
+  line-height: 12px;
+}
+.tr-panel .tr_root___EP_Dq,
+.tr-panel .tr_root___yvwp3 {
   position: relative;
 }
 .tr-del {
@@ -170,7 +176,8 @@
   display: none;
   cursor: pointer;
 }
-.tr_root___EP_Dq:hover .tr-del {
+.tr_root___EP_Dq:hover .tr-del,
+.tr_root___yvwp3:hover .tr-del {
   display: block;
 }
 .tr-panel .tr_root___PCyAT,

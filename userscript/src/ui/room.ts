@@ -15,7 +15,8 @@ const GAP_MS = 15 * 60 * 1000;
 export class RoomPanel {
   readonly el: HTMLElement;
   private header = h('div', { c: 'root___RdBC0' });
-  private tagsShown = false;
+  /** faction tags and Torn's Bubbles / Avatars settings the messages were drawn with */
+  private styleShown = '';
   /** Follow new messages: true while the reader is at the bottom (set by their scrolling, not re-measured). */
   private pinned = true;
   /** Messages from others that arrived while the reader was scrolled up: Torn's "↓ N new messages" pill. */
@@ -112,9 +113,15 @@ export class RoomPanel {
     this.renderComposer(room);
     this.renderPending();
     this.renderFooter();
-    if (room.showFactionTags !== this.tagsShown) {
-      this.tagsShown = room.showFactionTags;
+    const style = `${room.showFactionTags}:${state.chatStyle.bubbles}:${state.chatStyle.avatars}`;
+    if (style !== this.styleShown) {
+      this.styleShown = style;
+      this.footer.className = cx('footer___QxkWe', !state.chatStyle.bubbles && 'classic___S4LnO');
+      this.footerText = '';
+      this.pendingKey = '';
       this.renderMessages();
+      this.renderPending();
+      this.renderFooter();
     }
     if (room.unread && this.atBottom() && document.visibilityState === 'visible') markRead(this.id);
   }
@@ -260,20 +267,20 @@ export class RoomPanel {
     if (msgs[msgs.length - 1] !== m || !prev || prev !== this.shown || !this.shownRow) return this.renderMessages(mine);
     const stick = mine || this.pinned || this.atBottom();
     const rows = this.rows(m, prev, false);
-    this.shownRow.style.marginBottom = '5px';
+    this.shownRow.style.marginBottom = `${rowGap()}px`;
     this.list.append(...rows);
     this.shown = m;
     this.shownRow = rows[rows.length - 1];
     this.afterRender(stick);
   }
 
-  /** A message's rows: a time divider when a new group starts, then the message. As Torn: 5px between all messages, 10px after the last one. */
+  /** A message's rows: a time divider when a new group starts, then the message. As Torn: 5px between rows (6px without bubbles), 10px after the last one. */
   private rows(m: MessageView, prev: MessageView | undefined, hasNext: boolean, pending?: PendingMessage): HTMLElement[] {
     const rows: HTMLElement[] = [];
     const newGroup = !prev || m.ts - prev.ts > GAP_MS || tctDay(prev.ts) !== tctDay(m.ts);
-    if (newGroup) rows.push(h('div', { c: 'virtualItem___eIUjo', style: 'margin-bottom: 5px;' }, text('divider2', 'root___Pai0M messageGroupTimestamp___Aag0t', {}, this.stamp(m.ts))));
+    if (newGroup) rows.push(h('div', { c: cx('virtualItem___eIUjo', !state.chatStyle.bubbles && 'classic___S4LnO'), style: `margin-bottom: ${rowGap()}px;` }, text('divider2', 'root___Pai0M messageGroupTimestamp___Aag0t', {}, this.stamp(m.ts))));
     const first = newGroup || prev.userId !== m.userId;
-    rows.push(this.message(m, first, m.userId === state.me?.id, hasNext ? 5 : 10, pending));
+    rows.push(this.message(m, first, m.userId === state.me?.id, hasNext ? rowGap() : 10, pending));
     return rows;
   }
 
@@ -295,12 +302,12 @@ export class RoomPanel {
     });
     const stick = this.pinned || this.atBottom();
     this.pendingList.replaceChildren(...rows);
-    if (this.shownRow) this.shownRow.style.marginBottom = pending.length ? '5px' : '10px';
+    if (this.shownRow) this.shownRow.style.marginBottom = `${pending.length ? rowGap() : 10}px`;
     if (stick) this.toBottom();
   }
 
   private afterRender(stick: boolean): void {
-    if (this.shownRow && state.pending.some((p) => p.roomId === this.id)) this.shownRow.style.marginBottom = '5px';
+    if (this.shownRow && state.pending.some((p) => p.roomId === this.id)) this.shownRow.style.marginBottom = `${rowGap()}px`;
     this.renderFooter();
     if (stick) {
       this.toBottom();
@@ -317,24 +324,26 @@ export class RoomPanel {
   private message(m: MessageView, first: boolean, self: boolean, gap: number, pending?: PendingMessage): HTMLElement {
     const profile = `/profiles.php?XID=${m.userId}`;
     const canDelete = !pending && (self || (this.room?.role ?? 'member') !== 'member');
+    // Torn's chat settings: without bubbles a message is a classic line ("Name: text", the same for
+    // your own), without avatars it has no picture.
+    const classic = !state.chatStyle.bubbles;
+    const avatar = state.chatStyle.avatars
+      ? h('a', { 'data-label': 'avatar', href: profile, c: `root___uxEGq redirect___lSgmf smallWrapper___QAAkH ${classic ? 'avatar___b8bkC' : 'avatar___DTfNY'}` }, avatarImg(m.avatar, 'avatar___PYHqr smallAvatar___UPIO2'))
+      : null;
+    const sender = text('link2', `hrefLink___9O1GI ${classic ? 'sender___wV_Ae' : 'sender___WTwPl'} regular___hyk3H clickable___efRv1`, { href: profile }, `${senderName(this.room, m)}:`);
+    const body = h('span', { c: `root___XpplE body___HxuJg ${classic ? 'message___MITZq' : 'message___AI7Nl'}` }, h('span', { c: 'root___RoNAh' }, ...linkify(m.text)));
     return h(
       'div',
-      { c: 'virtualItem___eIUjo', style: `margin-bottom: ${gap}px;` },
+      { c: cx('virtualItem___eIUjo', classic && 'classic___S4LnO'), style: `margin-bottom: ${gap}px;` },
       h(
         'div',
         // Torn's pending style fades a message only when it is not confirmed within half a second.
-        { c: cx('root___EP_Dq', first && 'first___icNlg', self && 'self___HgXOK', pending && 'pending___aZTtW'), title: tct(m.ts) },
-        h(
-          'div',
-          { c: 'box___eWW6m' },
-          h(
-            'span',
-            { c: 'senderContainer___aAlZ2' },
-            h('a', { 'data-label': 'avatar', href: profile, c: 'root___uxEGq redirect___lSgmf smallWrapper___QAAkH avatar___DTfNY' }, avatarImg(m.avatar, 'avatar___PYHqr smallAvatar___UPIO2')),
-            text('link2', 'hrefLink___9O1GI sender___WTwPl regular___hyk3H clickable___efRv1', { href: profile }, `${senderName(this.room, m)}:`),
-          ),
-          h('span', { c: 'root___XpplE body___HxuJg message___AI7Nl' }, h('span', { c: 'root___RoNAh' }, ...linkify(m.text))),
-        ),
+        classic
+          ? { c: cx('root___yvwp3', pending && 'pending___aZTtW'), title: tct(m.ts) }
+          : { c: cx('root___EP_Dq', first && 'first___icNlg', self && 'self___HgXOK', pending && 'pending___aZTtW'), title: tct(m.ts) },
+        classic
+          ? h('div', { c: 'box___cZJah' }, h('span', {}, avatar, sender), body)
+          : h('div', { c: 'box___eWW6m' }, h('span', { c: 'senderContainer___aAlZ2' }, avatar, sender), body),
         canDelete
           ? withClick(icon('closeChat', 'tr-del', 'Delete message'), () => {
               if (confirm('Delete this message for everyone?')) api('DELETE', `/v1/rooms/${this.id}/messages/${m.id}`).catch((e) => this.flash(e.message));
@@ -344,7 +353,7 @@ export class RoomPanel {
       pending?.failed
         ? h(
             'div',
-            { c: 'root___dwjU1 alignEnd___zwJTZ' },
+            { c: cx('root___dwjU1', !classic && 'alignEnd___zwJTZ') },
             text('body', 'message___RIM_x', {}, 'Not sent'),
             text('link2', 'action___fg5Sc', { on: { click: () => retry(pending).catch((e) => this.flash(e.message)) } }, retryIcon('icon___NEsJp'), 'Retry'),
             text('link2', 'action___fg5Sc', { on: { click: () => discard(pending) } }, 'Delete'),
@@ -558,6 +567,9 @@ export class RoomPanel {
     return backView('Back to chat', back, '', [body]);
   }
 }
+
+/** Torn's space between message rows: 6px in its classic (no bubbles) style, else 5px. */
+const rowGap = () => (state.chatStyle.bubbles ? 5 : 6);
 
 /** Torn's typing indicator text. */
 function typingLabel(names: string[]): string {

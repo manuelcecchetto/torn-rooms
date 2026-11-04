@@ -2,7 +2,7 @@
 import tornCss from './generated/torn-chat.css';
 import extraCss from './extra.css';
 import { hasKey, logout, openEvents, session, storedSession } from './api';
-import { changed, handleEvent, setError, state, subscribe } from './store';
+import { changed, handleEvent, setError, state, subscribe, syncChatStyle } from './store';
 import { Layout } from './ui/layout';
 
 function waitForChat(): Promise<void> {
@@ -52,6 +52,12 @@ async function start(): Promise<void> {
 async function boot(): Promise<void> {
   document.documentElement.dataset.tornRooms = __VERSION__;
   await waitForChat();
+  // Follow the player's Torn chat styling, also when they change it in Torn's chat settings. Read only
+  // while the Torn tab is actively viewed (visible and focused), like everything taken from the page.
+  const syncIfActive = () => document.visibilityState === 'visible' && document.hasFocus() && syncChatStyle();
+  syncIfActive();
+  window.addEventListener('focus', syncIfActive);
+  setInterval(syncIfActive, 2000);
   const style = document.createElement('style');
   style.textContent = tornCss + '\n' + extraCss;
   document.head.append(style);

@@ -182,6 +182,37 @@
   max-height: 14px;
   display: inline;
 }
+.tr_root___yvwp3 {
+  width: -moz-fit-content;
+  width: fit-content;
+  margin-left: 11px;
+  margin-right: 11px;
+  display: flex;
+}
+.tr_avatar___b8bkC,.tr_root___yvwp3 {
+  position: relative;
+}
+.tr_avatar___b8bkC,.tr_sender___wV_Ae {
+  margin-right: 5px;
+}
+.tr_sender___wV_Ae {
+  vertical-align: text-bottom;
+  line-height: 15px!important;
+}
+.tr_box___cZJah {
+  -webkit-touch-callout: none;
+}
+.tr_box___cZJah>:first-child {
+  vertical-align: text-bottom;
+  display: inline-flex;
+  line-height: 15px!important;
+}
+.tr_message___MITZq {
+  vertical-align: text-bottom;
+  word-break: break-word;
+  color: var(--chat-theme-dark,#ddd) var(--chat-theme-light,#444)!important;
+  line-height: 15px!important;
+}
 .tr_pending___aZTtW {
   animation: .5s ease-in .5s forwards tr_fadeOut___nNauI;
 }
@@ -365,6 +396,10 @@
   margin-top: 5px;
   margin-bottom: 5px;
 }
+.tr_virtualItem___eIUjo.tr_classic___S4LnO .tr_messageGroupTimestamp___Aag0t {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
 .tr_footer___QxkWe {
   flex-direction: column;
   display: flex;
@@ -378,6 +413,18 @@
 .tr_footer___QxkWe .tr_lastMessageTimeInfo___XV7Vj,.tr_footer___QxkWe .tr_typingIndicator___Lo_wW {
   margin-top: -2px;
   margin-bottom: 10px;
+}
+.tr_footer___QxkWe.tr_classic___S4LnO .tr_lastMessageTimeInfo___XV7Vj {
+  margin-top: -2px;
+  padding-top: 2px;
+  padding-bottom: 1px;
+}
+.tr_footer___QxkWe.tr_classic___S4LnO .tr_typingIndicator___Lo_wW {
+  background: 0 0;
+  height: 14px;
+  min-height: 14px;
+  margin-top: -2px;
+  margin-left: 1px;
 }
 .tr_visible___geRbO {
   visibility: visible;

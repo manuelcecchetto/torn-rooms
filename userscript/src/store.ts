@@ -1,6 +1,6 @@
 // Client state: who we are, our rooms, loaded messages, which panels are open.
 import { LIMITS, type Me, type MessageView, type RoomView, type ServerEvent, type TypingUser } from '../../shared/protocol';
-import { api, type ConnState } from './api';
+import { api, pageUserId, type ConnState } from './api';
 
 export type DirectoryTab = 'rooms' | 'invites' | 'browse' | 'settings';
 
@@ -27,6 +27,8 @@ export const state = {
   error: null as string | null,
   /** sent messages the server has not confirmed yet, in send order */
   pending: [] as PendingMessage[],
+  /** Torn's message styling (its chat settings: Bubbles, Avatars), followed by our rooms */
+  chatStyle: { bubbles: true, avatars: true },
   /** who else is typing, by room, until when */
   typing: new Map<string, { userId: number; name: string; until: number }[]>(),
 };
@@ -285,6 +287,28 @@ async function post(p: PendingMessage): Promise<void> {
 /** The sender as shown in a room: `[TAG] Name` when the room shows faction tags. */
 export function senderName(room: RoomView | undefined, m: MessageView): string {
   return room?.showFactionTags && m.factionTag ? `[${m.factionTag}] ${m.name}` : m.name;
+}
+
+/**
+ * Re-reads the player's Torn chat settings (Bubbles, Avatars) from the data Torn's chat saves in this
+ * browser. Only how our rooms look depends on it; nothing is sent anywhere.
+ */
+export function syncChatStyle(): void {
+  let bubbles = true;
+  let avatars = true;
+  try {
+    const keys = Object.keys(localStorage).filter((k) => k.startsWith('tchat_query_cache:'));
+    const key = keys.find((k) => k.endsWith(`:${pageUserId()}`)) ?? keys[0];
+    const cache = JSON.parse(localStorage.getItem(key ?? '') ?? 'null') as { clientState?: { queries?: { queryKey: unknown[]; state?: { data?: Record<string, unknown> } }[] } } | null;
+    const settings = cache?.clientState?.queries?.find((q) => q.queryKey[0] === 'user' && q.queryKey[1] === 'settings')?.state?.data;
+    if (settings?.showBubbles === false) bubbles = false;
+    if (settings?.showAvatars === false) avatars = false;
+  } catch {
+    // Torn's defaults: bubbles and avatars
+  }
+  if (bubbles === state.chatStyle.bubbles && avatars === state.chatStyle.avatars) return;
+  state.chatStyle = { bubbles, avatars };
+  changed();
 }
 
 let typingTimer: ReturnType<typeof setTimeout> | undefined;
