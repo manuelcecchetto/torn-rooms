@@ -28,6 +28,13 @@ reacted with it, and a click on one adds or takes back yours. Close a room
 with the X in its header, like a private chat; it stays in the **Rooms** list, and a new message
 brings its button back.
 
+Tag players with `@Name`: typing `@` lists the room's members (arrows and Enter or Tab to pick). A
+tagged player gets an **@ N mentions** pill in the room, Torn's blue "new messages" pill, that jumps to
+the oldest message tagging them they have not seen, and an @ beside the room's button and card. A
+tag counts as seen once the message has been on screen, in every Torn tab.
+
+![Tagged: the @ pill; a click jumps to the message; typing @ lists who to tag](docs/screenshots/mentions.png)
+
 ## Layout
 
 - `worker/`: Cloudflare Worker + one SQLite Durable Object (`Hub`) holding rooms, access lists, messages and live event streams.
@@ -80,7 +87,7 @@ brings its button back.
 
 | | |
 |---|---|
-| Data storage | Player ID, name, faction ID and tag; profile picture URL only with the player's consent (off by default, changeable in Settings, revoking removes it from past messages); messages posted, with your name and faction tag at the time (last 5,000 per room); reactions you add to messages (removed with the message); room membership. |
+| Data storage | Player ID, name, faction ID and tag; profile picture URL only with the player's consent (off by default, changeable in Settings, revoking removes it from past messages); messages posted, with your name and faction tag at the time (last 5,000 per room); reactions you add to messages and who each message tags, with whether they have seen it (both removed with the message); room membership. |
 | Data sharing | Name, avatar, messages and reactions are visible to members of the rooms you post in. Nothing is sold or shared elsewhere. |
 | Purpose of use | Proving who you are and which faction you are in, for room access. |
 | Key storage & sharing | Kept in Tampermonkey storage on your device. Sent to the Torn Rooms server only to log in (every 6 hours); never stored there or shared. |

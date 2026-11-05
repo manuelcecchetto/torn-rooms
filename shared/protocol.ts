@@ -28,7 +28,21 @@ export interface MessageView {
   ts: number;
   /** In the order they were first used. */
   reactions: ReactionView[];
+  /** Players the text tags with `@Name`, resolved by the server among the room's members when it was posted. */
+  mentions: MentionView[];
 }
+
+/** A tagged player: `@name` in the text (any case) stands for them. */
+export interface MentionView {
+  id: number;
+  name: string;
+}
+
+/**
+ * `@Name` in a message: Torn names are letters, digits, `_` and `-`. Not after a letter, digit or
+ * `@`, so an email address tags nobody. Group 1 is the name.
+ */
+export const MENTION = /(?<![A-Za-z0-9_@])@([A-Za-z0-9_-]{1,32})/g;
 
 /** The reactions a message can get: the picker behind the bubble on a hovered message. */
 export const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'] as const;
@@ -68,6 +82,8 @@ export interface RoomView {
   lastReadId: number;
   /** Messages from others after lastReadId, capped at 100. */
   unread: number;
+  /** Messages tagging you that you have not seen yet, oldest first (at most 99): the @ button jumps to them. */
+  mentions: number[];
 }
 
 export interface BrowseRoom {
@@ -146,6 +162,8 @@ export type ServerEvent =
   | ({ t: 'reactions' } & ReactionsUpdate)
   /** everyone typing in the room now */
   | { t: 'typing'; roomId: string; users: TypingUser[] }
+  /** you saw these mentions (in another tab, maybe) */
+  | { t: 'mentions_seen'; roomId: string; ids: number[] }
   | { t: 'rooms_changed' };
 
 export const LIMITS = {
@@ -167,6 +185,10 @@ export const LIMITS = {
   /** any change (post, invite, join, settings) per user per minute */
   writesPerMinute: 60,
   invitesPerHour: 50,
+  /** players one message can tag */
+  mentionsPerMessage: 20,
+  /** unseen mentions a room reports */
+  mentionsListed: 99,
   /** reads (polls, history, lists) per user per minute; a polling client uses ~15 */
   readsPerMinute: 120,
   /** poll intervals: a room panel open, only the bar or the list (none in the background) */

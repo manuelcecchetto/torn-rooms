@@ -1,3 +1,4 @@
+import { MENTION, type MentionView } from '../../shared/protocol';
 // Tiny DOM helpers. Torn class names (name___hash) are prefixed with tr_ so they
 // match our copy of Torn's chat CSS (generated/torn-chat.css), never Torn's live one.
 import { ICONS, type IconName } from './generated/icons';
@@ -108,6 +109,11 @@ export function text(variant: Variant, cls: string, props: Props, ...children: C
   return h(TAG[variant], { ...props, c: `root___XpplE ${VARIANT[variant]} ${cls}` }, ...children);
 }
 
+/** Beside an unread counter: the room has messages tagging you that you have not seen. */
+export function atBadge(cls: string, mentions: number[] | undefined): HTMLElement | null {
+  return mentions?.length ? h('div', { c: cx('tr-at-badge', cls), title: `Tagged in ${mentions.length} message${mentions.length === 1 ? '' : 's'}` }, '@') : null;
+}
+
 /** Torn's unread counter badge (ln component). */
 export function badge(cls: string, count: number): HTMLElement | null {
   if (!count) return null;
@@ -144,15 +150,28 @@ export function ago(ts: number, now = Date.now()): string {
   return `${s} ago`;
 }
 
-/** Splits text into text nodes and https links, like Torn's chat. */
-export function linkify(s: string): Child[] {
+/** Splits text into text nodes and https links, like Torn's chat, and the `@Name`s the message tags into profile links (`me` stands out). */
+export function linkify(s: string, mentions: MentionView[] = [], me?: number): Child[] {
   const out: Child[] = [];
+  const tagged = new Map(mentions.map((m) => [m.name.toLowerCase(), m.id]));
+  const plain = (part: string) => {
+    let last = 0;
+    if (tagged.size)
+      for (const m of part.matchAll(MENTION)) {
+        const id = tagged.get(m[1].toLowerCase());
+        if (id === undefined) continue;
+        if (m.index! > last) out.push(part.slice(last, m.index));
+        out.push(h('a', { c: cx('tr-mention', id === me && 'tr-mention-me'), href: `/profiles.php?XID=${id}` }, m[0]));
+        last = m.index! + m[0].length;
+      }
+    if (last < part.length) out.push(part.slice(last));
+  };
   let last = 0;
   for (const m of s.matchAll(/https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]]/g)) {
-    if (m.index! > last) out.push(s.slice(last, m.index));
+    if (m.index! > last) plain(s.slice(last, m.index));
     out.push(h('a', { href: m[0], target: '_blank', rel: 'noopener noreferrer' }, m[0]));
     last = m.index! + m[0].length;
   }
-  if (last < s.length) out.push(s.slice(last));
+  if (last < s.length) plain(s.slice(last));
   return out;
 }

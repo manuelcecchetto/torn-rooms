@@ -1,7 +1,7 @@
 // Puts our buttons into Torn's chat bar and our panels next to Torn's open panels.
 // Panels are laid out like Torn's: stacked in one grid cell, each slid left with translateX and a
 // 150ms linear transition, reorderable by dragging the header; bar buttons are reorderable too.
-import { badge, cx, h, icon, roomIcon } from '../dom';
+import { atBadge, badge, cx, h, icon, roomIcon } from '../dom';
 import { DIRECTORY, joinedRooms, minimizePanels, moveBarButton, movePanel, state, toggleDirectory, toggleRoom, visiblePanels } from '../store';
 import { Directory } from './directory';
 import { sortable } from './drag';
@@ -158,6 +158,7 @@ export class Layout {
         },
         roomIcon(room.icon, cx('icon___vikBy', opened && 'opened___p8ZQ1')),
         badge('messageCount___db2PN', room.unread),
+        room.joined ? atBadge('tr-at-bar', room.mentions) : null,
       );
       const wrap = h('div', { c: 'root___tV4zg tr-bar-item', 'data-room': id }, button);
       sortable({

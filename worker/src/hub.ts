@@ -5,10 +5,12 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   LIMITS,
+  MENTION,
   REACTIONS,
   type AccessView,
   type BrowseRoom,
   type GrantKind,
+  type MentionView,
   type MessageView,
   type PollResponse,
   type PostPolicy,
@@ -52,6 +54,9 @@ CREATE INDEX IF NOT EXISTS memberships_user ON memberships(user_id);
 CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL, user_id INTEGER NOT NULL, name TEXT NOT NULL, avatar TEXT, faction_tag TEXT, text TEXT NOT NULL, ts INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, react_seq INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS messages_room ON messages(room_id, id);
 CREATE TABLE IF NOT EXISTS reactions(message_id INTEGER NOT NULL, room_id TEXT NOT NULL, user_id INTEGER NOT NULL, emoji TEXT NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY(message_id, user_id, emoji));
+CREATE TABLE IF NOT EXISTS mentions(message_id INTEGER NOT NULL, room_id TEXT NOT NULL, user_id INTEGER NOT NULL, name TEXT NOT NULL, seen INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(message_id, user_id));
+CREATE INDEX IF NOT EXISTS mentions_user ON mentions(user_id, room_id, seen);
+CREATE INDEX IF NOT EXISTS users_name ON users(name COLLATE NOCASE);
 `;
 
 interface RoomRow {
@@ -111,8 +116,8 @@ interface Stream {
 const encoder = new TextEncoder();
 const HEARTBEAT_MS = 20_000;
 
-const toMessage = (r: MessageRow, reactions: ReactionView[] = []): MessageView => ({
-  id: r.id, roomId: r.room_id, userId: r.user_id, name: r.name, avatar: r.avatar, factionTag: r.faction_tag, text: r.text, ts: r.ts, reactions,
+const toMessage = (r: MessageRow, reactions: ReactionView[] = [], mentions: MentionView[] = []): MessageView => ({
+  id: r.id, roomId: r.room_id, userId: r.user_id, name: r.name, avatar: r.avatar, factionTag: r.faction_tag, text: r.text, ts: r.ts, reactions, mentions,
 });
 
 export class Hub extends DurableObject<Env> {
@@ -193,6 +198,12 @@ export class Hub extends DurableObject<Env> {
             r.id, lastRead, v.id,
           )[0].n
         : 0;
+    const mentions = isJoined(room, v)
+      ? this.rows<{ message_id: number }>(
+          'SELECT message_id FROM mentions WHERE user_id = ? AND room_id = ? AND seen = 0 ORDER BY message_id LIMIT ?',
+          v.id, r.id, LIMITS.mentionsListed,
+        ).map((m) => m.message_id)
+      : [];
     return {
       id: r.id,
       name: r.name,
@@ -210,6 +221,7 @@ export class Hub extends DurableObject<Env> {
       lastMessage: last ? toMessage(last) : null,
       lastReadId: lastRead,
       unread,
+      mentions,
     };
   }
 
@@ -379,7 +391,7 @@ export class Hub extends DurableObject<Env> {
     if (!room || !canSee(room, c)) return fail(404, 'Room not found');
     if (room.ownerId !== c.id && !(c.superadmin && room.visibility === 'public')) return fail(403, 'Only the owner can delete a room');
     this.mutateRoom(id, () => {
-      for (const t of ['rooms', 'grants', 'admins', 'bans', 'memberships', 'messages', 'reactions']) {
+      for (const t of ['rooms', 'grants', 'admins', 'bans', 'memberships', 'messages', 'reactions', 'mentions']) {
         this.sql.exec(`DELETE FROM ${t} WHERE ${t === 'rooms' ? 'id' : 'room_id'} = ?`, id);
       }
     });
@@ -524,7 +536,7 @@ export class Hub extends DurableObject<Env> {
       'SELECT * FROM messages WHERE room_id = ? AND deleted = 0 AND id < ? ORDER BY id DESC LIMIT ?',
       id, before > 0 ? before : Number.MAX_SAFE_INTEGER, LIMITS.historyPage,
     );
-    return ok({ messages: this.withReactions(rows.reverse()) });
+    return ok({ messages: this.withExtras(rows.reverse()) });
   }
 
   async post(c: Caller, id: string, text: unknown): Promise<Res<MessageView>> {
@@ -550,11 +562,42 @@ export class Hub extends DurableObject<Env> {
         id, id, LIMITS.keptMessagesPerRoom,
       );
       this.sql.exec('DELETE FROM reactions WHERE room_id = ? AND message_id NOT IN (SELECT id FROM messages WHERE room_id = ?)', id, id);
+      this.sql.exec('DELETE FROM mentions WHERE room_id = ? AND message_id NOT IN (SELECT id FROM messages WHERE room_id = ?)', id, id);
     }
-    const msg = toMessage(row);
+    const mentions = this.tag(room, c, row.id, body);
+    const msg = toMessage(row, [], mentions);
     this.emit((s) => receives(room, s.caller), { t: 'msg', msg });
     this.typing.get(id)?.delete(c.id);
     return ok(msg);
+  }
+
+  /**
+   * Who a new message tags: each `@Name` that is a member of the room (joined, with access), not the
+   * sender. Resolved here, so the mentions a client gets are always people the text really names.
+   */
+  private tag(room: RoomCtx, c: Caller, messageId: number, text: string): MentionView[] {
+    const names = [...new Set([...text.matchAll(MENTION)].map((m) => m[1].toLowerCase()))].slice(0, LIMITS.mentionsPerMessage);
+    if (!names.length) return [];
+    const users = this.rows<{ id: number; name: string; faction_id: number | null }>(
+      `SELECT id, name, faction_id FROM users WHERE name COLLATE NOCASE IN (${names.map(() => '?').join(',')})`,
+      ...names,
+    ).filter((u) => u.id !== c.id && receives(room, { id: u.id, factionId: u.faction_id, superadmin: false }));
+    for (const u of users) this.sql.exec('INSERT OR IGNORE INTO mentions(message_id, room_id, user_id, name) VALUES (?, ?, ?, ?)', messageId, room.id, u.id, u.name);
+    return users.map((u) => ({ id: u.id, name: u.name }));
+  }
+
+  /** The caller saw these messages tagging them: they leave the room's @ list, in every tab. */
+  async seeMentions(c: Caller, id: string, ids: unknown): Promise<Res<{ ok: true }>> {
+    const room = this.roomCtx(id);
+    if (!room || !receives(room, c)) return fail(404, 'Room not found');
+    const list = Array.isArray(ids) ? [...new Set(ids.filter((x): x is number => Number.isInteger(x) && x > 0))].slice(0, LIMITS.mentionsListed) : [];
+    if (!list.length) return fail(400, 'No messages');
+    const seen = this.sql.exec(
+      `UPDATE mentions SET seen = 1 WHERE user_id = ? AND room_id = ? AND seen = 0 AND message_id IN (${list.map(() => '?').join(',')})`,
+      c.id, id, ...list,
+    ).rowsWritten;
+    if (seen) this.emit((s) => s.caller.id === c.id, { t: 'mentions_seen', roomId: id, ids: list });
+    return ok({ ok: true });
   }
 
   async setTyping(c: Caller, id: string): Promise<Res<{ ok: true }>> {
@@ -590,16 +633,27 @@ export class Hub extends DurableObject<Env> {
     if (m.user_id !== c.id && !canManage(room, c)) return fail(403, 'You can only delete your own messages');
     this.sql.exec('UPDATE messages SET deleted = 1 WHERE id = ?', messageId);
     this.sql.exec('DELETE FROM reactions WHERE message_id = ?', messageId);
+    this.sql.exec('DELETE FROM mentions WHERE message_id = ?', messageId);
     this.emit((s) => receives(room, s.caller), { t: 'msg_deleted', roomId: id, id: messageId });
     return ok({ ok: true });
   }
 
-  /** Messages with their reactions; one query for the whole page (ids are global, so a range covers it). */
-  private withReactions(rows: MessageRow[]): MessageView[] {
+  /** Messages with their reactions and mentions; one query each for the whole page (ids are global, so a range covers it). */
+  private withExtras(rows: MessageRow[]): MessageView[] {
+    if (!rows.length) return [];
     const reacted = rows.filter((r) => r.react_seq > 0).map((r) => r.id);
-    if (!reacted.length) return rows.map((r) => toMessage(r));
-    const all = this.reactionsIn(Math.min(...reacted), Math.max(...reacted));
-    return rows.map((r) => toMessage(r, all.get(r.id)));
+    const reactions = reacted.length ? this.reactionsIn(Math.min(...reacted), Math.max(...reacted)) : new Map<number, ReactionView[]>();
+    const ids = rows.map((r) => r.id);
+    const mentions = new Map<number, MentionView[]>();
+    for (const m of this.rows<{ message_id: number; user_id: number; name: string }>(
+      'SELECT message_id, user_id, name FROM mentions WHERE message_id BETWEEN ? AND ? ORDER BY message_id, rowid',
+      Math.min(...ids), Math.max(...ids),
+    )) {
+      let list = mentions.get(m.message_id);
+      if (!list) mentions.set(m.message_id, (list = []));
+      list.push({ id: m.user_id, name: m.name });
+    }
+    return rows.map((r) => toMessage(r, reactions.get(r.id), mentions.get(r.id)));
   }
 
   private reactionsIn(from: number, to: number): Map<number, ReactionView[]> {
@@ -679,6 +733,7 @@ export class Hub extends DurableObject<Env> {
         if (p[3] === 'messages' && m === 'POST') return this.post(c, id, body.text);
         if (p[3] === 'grants' && m === 'POST') return this.addGrant(c, id, body.kind, body.id, body.label);
       }
+      if (p.length === 5 && p[3] === 'mentions' && p[4] === 'seen' && m === 'POST') return this.seeMentions(c, id, body.ids);
       if (p.length === 5 && p[3] === 'messages' && m === 'DELETE') return this.deleteMessage(c, id, Number(p[4]));
       if (p.length === 6 && p[3] === 'messages' && p[5] === 'reactions' && m === 'POST') return this.react(c, id, Number(p[4]), body.emoji, body.on !== false);
       if (p.length === 5 && p[3] === 'admins') {
@@ -720,7 +775,7 @@ export class Hub extends DurableObject<Env> {
     const rsince = Number(reactionsAfter);
     const reactions: ReactionsUpdate[] =
       reactionsAfter !== undefined && Number.isInteger(rsince) && rsince >= 0
-        ? this.withReactions(
+        ? this.withExtras(
             this.rows<MessageRow>('SELECT * FROM messages WHERE react_seq > ? AND react_seq <= ? AND deleted = 0 ORDER BY react_seq LIMIT 500', rsince, reactionCursor).filter(readable),
           ).map((m) => ({ roomId: m.roomId, id: m.id, reactions: m.reactions }))
         : [];
@@ -733,7 +788,7 @@ export class Hub extends DurableObject<Env> {
     }
     if (after === undefined || !Number.isInteger(since) || since < 0) return ok({ ...(await this.snapshot(c, open)), messages: [], cursor, reactions, reactionCursor, typing });
     const { rooms } = await this.snapshot(c, '');
-    const messages = this.withReactions(this.rows<MessageRow>('SELECT * FROM messages WHERE id > ? AND id <= ? AND deleted = 0 ORDER BY id LIMIT 500', since, cursor).filter(readable));
+    const messages = this.withExtras(this.rows<MessageRow>('SELECT * FROM messages WHERE id > ? AND id <= ? AND deleted = 0 ORDER BY id LIMIT 500', since, cursor).filter(readable));
     return ok({ rooms, history: {}, messages, cursor, reactions, reactionCursor, typing });
   }
 

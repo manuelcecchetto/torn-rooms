@@ -469,3 +469,112 @@
   flex: 1;
   min-width: 0;
 }
+
+/* Mentions. A tagged name links to the profile; your own name stands out. */
+.tr-panel a.tr-mention {
+  font-weight: bold;
+  text-decoration: none;
+  color: var(--chat-theme-dark, #74c0fc) var(--chat-theme-light, #1864ab);
+}
+.tr_self___HgXOK a.tr-mention {
+  color: #d0ebff;
+}
+.tr-panel a.tr-mention-me {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(24, 100, 171, 0.35);
+  color: var(--chat-theme-dark, #d0ebff) var(--chat-theme-light, #1864ab);
+}
+.tr-panel a.tr-mention:hover {
+  text-decoration: underline;
+}
+/* The message the @ button went to. */
+.tr-flash {
+  animation: tr-flash 1600ms ease-out;
+}
+@keyframes tr-flash {
+  0%, 30% { box-shadow: 0 0 0 2px #4dabf7, 0 0 10px rgba(77, 171, 247, 0.7); }
+  100% { box-shadow: 0 0 0 2px rgba(77, 171, 247, 0), 0 0 10px rgba(77, 171, 247, 0); }
+}
+/* "@ N mentions": Torn's blue "new messages" pill again, above it when both show. */
+.tr-at-pill {
+  z-index: 2;
+  animation: tr-at-in 150ms ease-out;
+}
+.tr-at-pill.tr-at-up {
+  bottom: 40px;
+}
+.tr-at-sign {
+  font: bold 14px/1 Arial, sans-serif;
+  margin-top: -1px;
+}
+@keyframes tr-at-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+/* "@" beside a room's unread counter: on its chat-bar button and its card in the Rooms list. */
+.tr-at-badge {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  box-sizing: border-box;
+  border: 1px solid #a5d8ff;
+  border-radius: 50%;
+  background: #1864ab;
+  box-shadow: 0 0 5px rgba(77, 171, 247, 0.5);
+  color: #fff;
+  font: bold 11px/1 Arial, sans-serif;
+  pointer-events: none;
+}
+.tr-at-bar {
+  top: -14px;
+  left: 0;
+}
+.tr-at-card {
+  top: 5px;
+  left: 54px;
+}
+/* The names offered while typing @, over the bottom of the messages. */
+.tr-suggest {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 4px;
+  z-index: 3;
+  padding: 3px 0;
+  border-radius: 5px;
+  border: 1px solid var(--chat-theme-dark, #555) var(--chat-theme-light, #ccc);
+  background: var(--chat-theme-dark, #222) var(--chat-theme-light, #fff);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+.tr-suggest-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 10px;
+  color: var(--chat-theme-dark, #ddd) var(--chat-theme-light, #333);
+  font-size: 12px;
+  cursor: pointer;
+}
+.tr-suggest-on {
+  background: var(--chat-theme-dark, #1864ab) var(--chat-theme-light, #d0ebff);
+  color: var(--chat-theme-dark, #fff) var(--chat-theme-light, #000);
+}
+.tr-suggest-on .tr-suggest-id {
+  color: var(--chat-theme-dark, #a5d8ff) var(--chat-theme-light, #1864ab);
+}
+.tr-suggest-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tr-suggest-name b {
+  color: var(--chat-theme-dark, #fff) var(--chat-theme-light, #000);
+}
+.tr-suggest-id {
+  margin-left: auto;
+  color: var(--chat-theme-dark, #888) var(--chat-theme-light, #888);
+  font-size: 11px;
+}

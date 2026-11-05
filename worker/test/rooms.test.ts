@@ -467,3 +467,55 @@ describe('reactions', () => {
     await o.close();
   });
 });
+
+describe('mentions', () => {
+  it('tags members named with @, never the sender, outsiders or people who have not joined', async () => {
+    const owner = await login(5900, 5901);
+    const member = await login(5902, 5901);
+    const pending = await login(5903, 5901); // in the invited faction, has not opened the room
+    await login(5904, 0); // outsider
+    const room = await createRoom(owner, { name: 'Tags' });
+    await call(owner, 'POST', `/v1/rooms/${room.id}/grants`, { kind: 'faction', id: 5901, label: 'Us' });
+    await call(member, 'POST', `/v1/rooms/${room.id}/join`);
+    const m = await stream(member, [room.id]);
+    await tick();
+
+    const msg = (
+      await call<MessageView>(owner, 'POST', `/v1/rooms/${room.id}/messages`, {
+        text: '@player5902 and @Player5902, @Player5903 @Player5904 @Player5900 a@Player5902.com @Nobody',
+      })
+    ).body;
+    expect(msg.mentions).toEqual([{ id: 5902, name: 'Player5902' }]);
+    await tick();
+    expect(m.events.find((e) => e.t === 'msg')).toMatchObject({ msg: { id: msg.id, mentions: [{ id: 5902, name: 'Player5902' }] } });
+
+    const rooms = async (token: string) => (await call<{ rooms: RoomView[] }>(token, 'GET', '/v1/rooms')).body.rooms.find((r) => r.id === room.id);
+    expect((await rooms(member))?.mentions).toEqual([msg.id]);
+    expect((await rooms(owner))?.mentions).toEqual([]);
+    expect((await rooms(pending))?.mentions).toEqual([]);
+    // Reading the room does not see the mention: only the message coming into view does.
+    await call(member, 'POST', `/v1/rooms/${room.id}/read`, { id: msg.id });
+    expect((await rooms(member))?.mentions).toEqual([msg.id]);
+    const history = (await call<{ messages: MessageView[] }>(member, 'GET', `/v1/rooms/${room.id}/messages`)).body.messages;
+    expect(history.find((x) => x.id === msg.id)?.mentions).toEqual([{ id: 5902, name: 'Player5902' }]);
+    const polled = (await call<PollResponse>(member, 'GET', '/v1/poll?open=&after=0')).body;
+    expect(polled.messages.find((x) => x.id === msg.id)?.mentions).toEqual([{ id: 5902, name: 'Player5902' }]);
+    expect(polled.rooms.find((r) => r.id === room.id)?.mentions).toEqual([msg.id]);
+
+    // Only your own mentions can be seen, and seeing them tells your other tabs.
+    expect((await call(owner, 'POST', `/v1/rooms/${room.id}/mentions/seen`, { ids: [msg.id] })).status).toBe(200);
+    expect((await rooms(member))?.mentions).toEqual([msg.id]);
+    expect((await call(member, 'POST', `/v1/rooms/${room.id}/mentions/seen`, { ids: 'all' })).status).toBe(400);
+    expect((await call(member, 'POST', `/v1/rooms/${room.id}/mentions/seen`, { ids: [msg.id] })).status).toBe(200);
+    expect((await rooms(member))?.mentions).toEqual([]);
+    await tick();
+    expect(m.events.at(-1)).toEqual({ t: 'mentions_seen', roomId: room.id, ids: [msg.id] });
+
+    // A deleted message takes its mention with it.
+    const again = (await call<MessageView>(owner, 'POST', `/v1/rooms/${room.id}/messages`, { text: 'hey @Player5902' })).body;
+    expect((await rooms(member))?.mentions).toEqual([again.id]);
+    await call(owner, 'DELETE', `/v1/rooms/${room.id}/messages/${again.id}`);
+    expect((await rooms(member))?.mentions).toEqual([]);
+    await m.close();
+  });
+});

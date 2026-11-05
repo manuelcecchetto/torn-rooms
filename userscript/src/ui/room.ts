@@ -3,7 +3,7 @@ import { LIMITS, REACTIONS, type AccessView, type MessageView, type ReactionView
 import { api } from '../api';
 import { ago, cx, fill, h, icon, linkify, retryIcon, roomIcon, tct, tctDay, text, type Child } from '../dom';
 import type { IconName } from '../generated/icons';
-import { closeRoom, deleteRoom, discard, join, leave, loadHistory, markRead, onReactions, onRoomMessage, react, refreshRooms, retry, send, senderName, state, toggleRoom, type PendingMessage } from '../store';
+import { closeRoom, deleteRoom, discard, join, leave, loadHistory, markRead, onReactions, onRoomMessage, react, refreshRooms, retry, seeMentions, send, senderName, state, tagsMe, toggleRoom, type PendingMessage } from '../store';
 import { backView, info, parseTornId, setting, textInput, tornBtn, warning } from './forms';
 import { roomForm } from './roomForm';
 import defaultAvatar from '../../assets/avatar-default.jpg';
@@ -53,6 +53,18 @@ export class RoomPanel {
   /** Who reacted with one emoji, shown while the pointer is on its reaction. */
   private who: { id: number; emoji: string; el: HTMLElement } | null = null;
   private footerTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Torn's blue pill again, "@ N mentions": jumps to the oldest message tagging you that you have not seen. */
+  private atPill: HTMLElement | null = null;
+  private atShown = 0;
+  private jumping = false;
+  /** Messages tagging you count as seen once on screen; these are the ones on it now. */
+  private mentionWatch: IntersectionObserver;
+  private mentionsInView = new Set<number>();
+  private onVisible = () => this.seeVisibleMentions();
+  /** The names offered while typing `@`: the room's members, fetched when first needed. */
+  private suggest: { el: HTMLElement; start: number; query: string; items: Candidate[]; active: number } | null = null;
+  private members: { at: number; list: Candidate[] } | null = null;
+  private membersLoading = false;
 
   constructor(readonly id: string) {
     this.el = h('div', { c: 'root___Ex8tg root___hrPnu visible___IVBmB root___IOJWq tr-panel', 'data-room': id });
@@ -63,6 +75,7 @@ export class RoomPanel {
       on: {
         keydown: (e: KeyboardEvent) => {
           e.stopPropagation();
+          if (this.suggest && !e.isComposing && this.suggestKey(e)) return;
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             this.submit();
@@ -71,7 +84,12 @@ export class RoomPanel {
         input: () => {
           this.syncSend();
           this.pingTyping();
+          this.updateSuggest();
         },
+        // The caret moved into or out of an @name.
+        click: () => this.updateSuggest(),
+        keyup: (e: KeyboardEvent) => ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key) && this.updateSuggest(),
+        blur: () => this.closeSuggest(),
       },
     });
     this.sendBtn = h('button', { type: 'button', c: 'iconWrapper___DRSkm', on: { click: () => this.submit() } }, icon('send', 'icon___mMNXf'));
@@ -97,6 +115,19 @@ export class RoomPanel {
     });
     this.scroller.addEventListener('pointermove', (e) => this.trackHover(e));
     this.scroller.addEventListener('pointerleave', (e) => e.pointerType !== 'touch' && this.setHovered(null));
+    // Half a message on screen is seen; a message taller than the panel counts once it fills half of it.
+    this.mentionWatch = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const id = Number((e.target as HTMLElement).dataset.id);
+          if (e.intersectionRatio >= 0.5 || (e.rootBounds && e.intersectionRect.height >= e.rootBounds.height / 2)) this.mentionsInView.add(id);
+          else this.mentionsInView.delete(id);
+        }
+        this.seeVisibleMentions();
+      },
+      { root: this.scroller, threshold: [0, 0.25, 0.5, 0.75, 1] },
+    );
+    document.addEventListener('visibilitychange', this.onVisible);
     this.content.append(h('div', { c: 'root___v2RvA' }, this.scroller), this.composerSlot);
     this.el.append(this.header, this.content);
     this.unsub = onRoomMessage((roomId, msg) => {
@@ -127,7 +158,10 @@ export class RoomPanel {
     this.unsub();
     this.unsubReactions();
     this.closePicker();
+    this.closeSuggest();
     this.hideWho();
+    this.mentionWatch.disconnect();
+    document.removeEventListener('visibilitychange', this.onVisible);
     clearTimeout(this.hoverTimer);
     clearTimeout(this.footerTimer);
     this.el.remove();
@@ -145,6 +179,8 @@ export class RoomPanel {
     this.renderComposer(room);
     this.renderPending();
     this.renderFooter();
+    this.renderAt(room);
+    this.seeVisibleMentions();
     const style = `${room.showFactionTags}:${state.chatStyle.bubbles}:${state.chatStyle.avatars}`;
     if (style !== this.styleShown) {
       this.styleShown = style;
@@ -269,6 +305,7 @@ export class RoomPanel {
       close,
     );
     this.scroller.parentElement?.append(this.pill);
+    this.atPill?.classList.toggle('tr-at-up', !!this.pill);
   }
 
   private async loadOlder(): Promise<void> {
@@ -290,6 +327,8 @@ export class RoomPanel {
     this.hideWho();
     this.setHovered(null);
     this.reactionRows.clear();
+    this.mentionWatch.disconnect();
+    this.mentionsInView.clear();
     const items: HTMLElement[] = [];
     msgs.forEach((m, i) => items.push(...this.rows(m, msgs[i - 1], i < msgs.length - 1)));
     this.list.replaceChildren(...items);
@@ -334,7 +373,7 @@ export class RoomPanel {
     let prev = (state.messages.get(this.id) ?? []).at(-1);
     const rows: HTMLElement[] = [];
     pending.forEach((p, i) => {
-      const view: MessageView = { id: 0, roomId: p.roomId, userId: me?.id ?? 0, name: me?.name ?? '', avatar: null, factionTag: me?.factionTag ?? null, text: p.text, ts: p.ts, reactions: [] };
+      const view: MessageView = { id: 0, roomId: p.roomId, userId: me?.id ?? 0, name: me?.name ?? '', avatar: null, factionTag: me?.factionTag ?? null, text: p.text, ts: p.ts, reactions: [], mentions: [] };
       rows.push(...this.rows(view, prev, i < pending.length - 1, p));
       prev = view;
     });
@@ -369,7 +408,7 @@ export class RoomPanel {
       ? h('a', { 'data-label': 'avatar', href: profile, c: `root___uxEGq redirect___lSgmf smallWrapper___QAAkH ${classic ? 'avatar___b8bkC' : 'avatar___DTfNY'}` }, avatarImg(m.avatar, 'avatar___PYHqr smallAvatar___UPIO2'))
       : null;
     const sender = text('link2', `hrefLink___9O1GI ${classic ? 'sender___wV_Ae' : 'sender___WTwPl'} regular___hyk3H clickable___efRv1`, { href: profile }, `${senderName(this.room, m)}:`);
-    const body = h('span', { c: `root___XpplE body___HxuJg ${classic ? 'message___MITZq' : 'message___AI7Nl'}` }, h('span', { c: 'root___RoNAh' }, ...linkify(m.text)));
+    const body = h('span', { c: `root___XpplE body___HxuJg ${classic ? 'message___MITZq' : 'message___AI7Nl'}` }, h('span', { c: 'root___RoNAh' }, ...linkify(m.text, m.mentions, state.me?.id)));
     const bubble = h(
       'div',
       // Torn's pending style fades a message only when it is not confirmed within half a second.
@@ -387,9 +426,9 @@ export class RoomPanel {
       this.fillReactions(reactions, m);
       bubble.append(reactions, this.tools(m, bubble, canDelete));
     }
-    return h(
+    const row = h(
       'div',
-      { c: cx('virtualItem___eIUjo', classic && 'classic___S4LnO'), style: `margin-bottom: ${gap}px;` },
+      { c: cx('virtualItem___eIUjo', classic && 'classic___S4LnO'), style: `margin-bottom: ${gap}px;`, 'data-id': pending ? undefined : m.id },
       bubble,
       pending?.failed
         ? h(
@@ -401,6 +440,195 @@ export class RoomPanel {
           )
         : null,
     );
+    if (!pending && tagsMe(m)) this.mentionWatch.observe(row);
+    return row;
+  }
+
+  // ---------------------------------------------------------------- mentions
+
+  /** Over the "new messages" pill when both show; its X counts the mentions as seen. */
+  private renderAt(room: RoomView): void {
+    const n = room.joined ? (room.mentions ?? []).length : 0;
+    if (n === this.atShown) return;
+    this.atShown = n;
+    this.atPill?.remove();
+    this.atPill = null;
+    if (!n) return;
+    const close = h('div', { role: 'presentation', c: 'closeButton___zQTHG' }, icon('closeChat', 'closeIcon___UMWK4', 'Dismiss mentions'));
+    close.addEventListener('click', (e) => {
+      e.stopPropagation();
+      seeMentions(this.id, this.room?.mentions ?? []);
+    });
+    this.atPill = h(
+      'button',
+      { type: 'button', c: cx('root___XpplE subtitle___u4sr8 root___dtYq3 tr-at-pill', this.pill && 'tr-at-up'), style: 'color: white;', title: 'Go to the message tagging you', on: { click: () => this.jumpToMention() } },
+      h('span', { c: 'tr-at-sign' }, '@'),
+      `${n > 99 ? '99+' : n} mention${n === 1 ? '' : 's'}`,
+      close,
+    );
+    this.scroller.parentElement?.append(this.atPill);
+  }
+
+  /** Unseen mentions on screen, while the page is looked at, are seen. */
+  private seeVisibleMentions(): void {
+    if (!this.mentionsInView.size || document.visibilityState !== 'visible') return;
+    const ids = (this.room?.mentions ?? []).filter((id) => this.mentionsInView.has(id));
+    if (ids.length) seeMentions(this.id, ids);
+  }
+
+  /** The @ button: to the oldest unseen message tagging you, loading older history until it is there. */
+  private async jumpToMention(): Promise<void> {
+    const target = this.room?.mentions?.[0];
+    if (!target || this.jumping) return;
+    this.jumping = this.loading = true;
+    try {
+      let loaded = false;
+      for (let pages = 0; pages < MAX_JUMP_PAGES; pages++) {
+        const list = state.messages.get(this.id);
+        if (list && (list.some((m) => m.id === target) || !list.length || list[0].id < target || !state.more.get(this.id))) break;
+        await loadHistory(this.id, !!list);
+        loaded = true;
+      }
+      if (loaded) this.renderMessages();
+      const row = this.list.querySelector<HTMLElement>(`[data-id="${target}"]`);
+      // Deleted, or too far back to load: nothing to go to.
+      seeMentions(this.id, [target]);
+      if (row) this.scrollToRow(row);
+    } catch (e) {
+      this.flash((e as Error).message);
+    } finally {
+      this.jumping = this.loading = false;
+    }
+  }
+
+  /** Brings a message to the middle of the panel (smoothly for the last screen of the way) and makes it flash. */
+  private scrollToRow(row: HTMLElement): void {
+    const s = this.scroller;
+    const top = () => s.scrollTop + row.getBoundingClientRect().top - s.getBoundingClientRect().top - Math.max(8, (s.clientHeight - row.offsetHeight) / 2);
+    this.pinned = false;
+    if (Math.abs(top() - s.scrollTop) > s.clientHeight) s.scrollTop = top() + (top() < s.scrollTop ? s.clientHeight : -s.clientHeight);
+    s.scrollTo({ top: top(), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    const bubble = row.querySelector<HTMLElement>('.tr_root___EP_Dq, .tr_root___yvwp3');
+    if (!bubble) return;
+    bubble.classList.remove('tr-flash');
+    void bubble.offsetWidth; // restart the animation
+    bubble.classList.add('tr-flash');
+    bubble.addEventListener('animationend', (e) => e.target === bubble && bubble.classList.remove('tr-flash'), { once: true });
+  }
+
+  // ---------------------------------------------------------------- @name suggestions
+
+  /** The `@name` being typed right before the caret. */
+  private mentionAtCaret(): { start: number; query: string } | null {
+    const ta = this.textarea;
+    if (ta.selectionStart !== ta.selectionEnd) return null;
+    const before = ta.value.slice(0, ta.selectionStart);
+    const m = /(?:^|[^A-Za-z0-9_@])@([A-Za-z0-9_-]{0,32})$/.exec(before);
+    return m ? { start: before.length - m[1].length - 1, query: m[1] } : null;
+  }
+
+  private updateSuggest(): void {
+    const at = this.room?.canPost ? this.mentionAtCaret() : null;
+    if (!at) return this.closeSuggest();
+    this.loadMembers();
+    const items = this.candidates(at.query);
+    if (!items.length) return this.closeSuggest();
+    // The highlight stays on its name while the list only refreshes (members arriving); a new query starts at the best match.
+    const prev = this.suggest?.query === at.query ? this.suggest.items[this.suggest.active]?.id : undefined;
+    const el = this.suggest?.el ?? h('div', { c: 'tr-suggest', role: 'listbox', on: { pointerdown: (e: Event) => e.preventDefault() } });
+    this.suggest = { el, start: at.start, query: at.query, items, active: Math.max(0, items.findIndex((u) => u.id === prev)) };
+    this.paintSuggest();
+    if (!el.isConnected) this.scroller.parentElement?.append(el);
+  }
+
+  private paintSuggest(): void {
+    const s = this.suggest;
+    if (!s) return;
+    fill(
+      s.el,
+      s.items.map((u, i) =>
+        h(
+          'div',
+          {
+            c: cx('tr-suggest-item', i === s.active && 'tr-suggest-on'),
+            role: 'option',
+            'aria-selected': String(i === s.active),
+            on: {
+              click: () => this.pick(u),
+              pointermove: () => {
+                if (s.active === i) return;
+                s.active = i;
+                this.paintSuggest();
+              },
+            },
+          },
+          h('span', { c: 'tr-suggest-name' }, ...matched(u.name, s.query)),
+          h('span', { c: 'tr-suggest-id' }, `[${u.id}]`),
+        ),
+      ),
+    );
+  }
+
+  /** Arrows move through the names, Enter or Tab picks one, Escape closes the list. */
+  private suggestKey(e: KeyboardEvent): boolean {
+    const s = this.suggest!;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      s.active = (s.active + (e.key === 'ArrowDown' ? 1 : -1) + s.items.length) % s.items.length;
+      this.paintSuggest();
+    } else if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') this.pick(s.items[s.active]);
+    else if (e.key === 'Escape') this.closeSuggest();
+    else return false;
+    e.preventDefault();
+    return true;
+  }
+
+  /** Replaces the `@name` being typed with the picked player's name and a space. */
+  private pick(u: Candidate): void {
+    const s = this.suggest;
+    if (!s) return;
+    const ta = this.textarea;
+    const spaced = /^\s/.test(ta.value.slice(ta.selectionStart));
+    ta.setRangeText(`@${u.name}${spaced ? '' : ' '}`, s.start, ta.selectionStart, 'end');
+    if (spaced) ta.setSelectionRange(ta.selectionStart + 1, ta.selectionStart + 1);
+    this.closeSuggest();
+    this.syncSend();
+  }
+
+  private closeSuggest(): void {
+    this.suggest?.el.remove();
+    this.suggest = null;
+  }
+
+  /** The room's members (asked again after a minute), refreshing the open list when they arrive. */
+  private loadMembers(): void {
+    if (this.membersLoading || (this.members && Date.now() - this.members.at < 60_000)) return;
+    this.membersLoading = true;
+    api<AccessView>('GET', `/v1/rooms/${this.id}/access`)
+      .then(
+        (a) => (this.members = { at: Date.now(), list: a.members.map((m) => ({ id: m.id, name: m.name })) }),
+        () => (this.members = { at: Date.now(), list: this.members?.list ?? [] }),
+      )
+      .finally(() => {
+        this.membersLoading = false;
+        if (this.suggest) this.updateSuggest();
+      });
+  }
+
+  /** Members matching what follows the @, not you: names starting with it first, then who spoke last, then A to Z. */
+  private candidates(query: string): Candidate[] {
+    const msgs = state.messages.get(this.id) ?? [];
+    const spoke = new Map<number, number>();
+    msgs.forEach((m, i) => spoke.set(m.userId, i));
+    // Until the member list arrives, the people in the loaded messages.
+    const people = new Map<number, string>((this.members?.list ?? msgs.map((m) => ({ id: m.userId, name: m.name }))).map((u) => [u.id, u.name]));
+    people.delete(state.me?.id ?? 0);
+    const q = query.toLowerCase();
+    return [...people]
+      .map(([id, name]) => ({ id, name, lower: name.toLowerCase() }))
+      .filter((u) => u.lower.includes(q))
+      .sort((a, b) => Number(b.lower.startsWith(q)) - Number(a.lower.startsWith(q)) || (spoke.get(b.id) ?? -1) - (spoke.get(a.id) ?? -1) || a.lower.localeCompare(b.lower))
+      .slice(0, SUGGEST_MAX)
+      .map(({ id, name }) => ({ id, name }));
   }
 
   /**
@@ -677,6 +905,7 @@ export class RoomPanel {
   private async submit(): Promise<void> {
     const value = this.textarea.value.trim();
     if (!value) return;
+    this.closeSuggest();
     this.textarea.value = '';
     this.typingSent = 0;
     this.syncSend();
@@ -816,6 +1045,24 @@ export class RoomPanel {
     draw();
     return backView('Back to chat', back, '', [body]);
   }
+}
+
+interface Candidate {
+  id: number;
+  name: string;
+}
+
+/** Names the @ list offers at once. */
+const SUGGEST_MAX = 6;
+
+/** History pages the @ button loads at most to reach a mention (50 messages each). */
+const MAX_JUMP_PAGES = 40;
+
+/** A name with the part matching the typed query in bold. */
+function matched(name: string, query: string): Child[] {
+  const i = query ? name.toLowerCase().indexOf(query.toLowerCase()) : -1;
+  if (i < 0) return [name];
+  return [name.slice(0, i), h('b', {}, name.slice(i, i + query.length)), name.slice(i + query.length)];
 }
 
 /** Names listed when hovering a reaction before "and N more". */

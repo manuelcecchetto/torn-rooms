@@ -103,6 +103,8 @@ export async function refreshRooms(): Promise<void> {
 }
 
 function setRooms(rooms: RoomView[]): void {
+  // Mentions seen here stay seen while the server has not heard about it yet.
+  for (const r of rooms) r.mentions = (r.mentions ?? []).filter((id) => !seenMentions.has(id));
   state.rooms = new Map(rooms.map((r) => [r.id, r]));
   // Drop bar buttons for rooms we lost access to.
   const before = state.open.length;
@@ -367,6 +369,34 @@ function pruneTyping(): void {
   changed();
 }
 
+/** Mentions of us we saw, by message id (ids are global): never shown as unseen again in this tab. */
+const seenMentions = new Set<number>();
+const seenQueue = new Map<string, Set<number>>();
+let seenTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** We saw these messages tagging us: off the room's @ button now, told to the server shortly after (batched). */
+export function seeMentions(roomId: string, ids: number[]): void {
+  const room = state.rooms.get(roomId);
+  const fresh = ids.filter((id) => !seenMentions.has(id));
+  if (!fresh.length) return;
+  for (const id of fresh) seenMentions.add(id);
+  if (room) room.mentions = (room.mentions ?? []).filter((id) => !seenMentions.has(id));
+  changed();
+  let queue = seenQueue.get(roomId);
+  if (!queue) seenQueue.set(roomId, (queue = new Set()));
+  for (const id of fresh) queue.add(id);
+  clearTimeout(seenTimer);
+  seenTimer = setTimeout(() => {
+    for (const [id, set] of seenQueue) api('POST', `/v1/rooms/${id}/mentions/seen`, { ids: [...set] }).catch(() => {});
+    seenQueue.clear();
+  }, 300);
+}
+
+/** Does the message tag us? */
+export function tagsMe(m: MessageView): boolean {
+  return !!state.me && m.userId !== state.me.id && (m.mentions ?? []).some((x) => x.id === state.me!.id);
+}
+
 let readTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** Marks everything loaded in the room as read (debounced). */
 export function markRead(id: string): void {
@@ -395,6 +425,9 @@ function addMessage(msg: MessageView): void {
     for (const fn of messageListeners) fn(msg.roomId, msg);
   }
   const room = state.rooms.get(msg.roomId);
+  if (room && tagsMe(msg) && !seenMentions.has(msg.id) && !(room.mentions ?? []).includes(msg.id)) {
+    room.mentions = [...(room.mentions ?? []), msg.id].sort((a, b) => a - b);
+  }
   if (room && (!room.lastMessage || room.lastMessage.id < msg.id)) {
     room.lastMessage = msg;
     if (msg.userId !== state.me?.id) room.unread += 1;
@@ -425,12 +458,19 @@ export function handleEvent(ev: ServerEvent): void {
   } else if (ev.t === 'msg_deleted') {
     const list = state.messages.get(ev.roomId);
     if (list) state.messages.set(ev.roomId, list.filter((m) => m.id !== ev.id));
+    const room = state.rooms.get(ev.roomId);
+    if (room?.mentions?.includes(ev.id)) room.mentions = room.mentions.filter((id) => id !== ev.id);
     for (const fn of messageListeners) fn(ev.roomId, null);
     changed();
   } else if (ev.t === 'reactions') {
     applyReactions(ev);
   } else if (ev.t === 'typing') {
     setTyping(ev.roomId, ev.users);
+  } else if (ev.t === 'mentions_seen') {
+    for (const id of ev.ids) seenMentions.add(id);
+    const room = state.rooms.get(ev.roomId);
+    if (room) room.mentions = (room.mentions ?? []).filter((id) => !seenMentions.has(id));
+    changed();
   } else if (ev.t === 'rooms_changed') {
     refreshRooms().catch(() => {});
   }

@@ -1,7 +1,7 @@
 // The "Rooms" panel: Torn's People panel layout with rooms instead of private chats.
 import { LIMITS, type BrowseRoom, type RoomView } from '../../../shared/protocol';
 import { api, ApiError, login, setShowAvatar } from '../api';
-import { ago, badge, componentIcon, cx, h, icon, roomIcon, text } from '../dom';
+import { ago, atBadge, badge, componentIcon, cx, h, icon, roomIcon, text } from '../dom';
 import type { IconName } from '../generated/icons';
 import { invites, join, joinedRooms, openRoom, refreshRooms, senderName, setDirectoryTab, setError, setOwnAvatar, state, toggleDirectory, type DirectoryTab } from '../store';
 import { actionButton, checkbox, setting, textInput, tornBtn, warning } from './forms';
@@ -110,7 +110,7 @@ export class Directory {
     return h('div', { c: 'root___wDVPW root___TNYGW' }, box.root);
   }
 
-  private card(opts: { key: string; iconName: string; color?: string; title: string; metadata?: string; description: string; unread?: number; onClick: () => void; createIcon?: boolean }): HTMLElement {
+  private card(opts: { key: string; iconName: string; color?: string; title: string; metadata?: string; description: string; unread?: number; mentions?: number[]; onClick: () => void; createIcon?: boolean }): HTMLElement {
     return h(
       'button',
       {
@@ -127,6 +127,7 @@ export class Directory {
         h('div', { c: 'header___PzxzT' }, text('link1', 'title___BsFVo regular___hyk3H', {}, opts.title), opts.metadata ? text('body', 'metadata___n5Pj2', {}, opts.metadata) : null),
         h('div', { c: 'content___LLeBK' }, text('body', 'description____safi', {}, h('span', { c: 'root___RoNAh' }, opts.description))),
         badge('messageCount___IqCpE', opts.unread ?? 0),
+        atBadge('tr-at-card', opts.mentions),
       ),
     );
   }
@@ -156,6 +157,7 @@ export class Directory {
           metadata: r.lastMessage ? ago(r.lastMessage.ts) : invitesOnly ? 'invited' : '',
           description: r.lastMessage ? `${senderName(r, r.lastMessage)}: ${r.lastMessage.text}` : r.description || 'No messages yet',
           unread: r.unread,
+          mentions: r.joined ? r.mentions : undefined,
           onClick: () => (r.joined ? openRoom(r.id) : join(r.id).catch((e) => alert(e.message))),
         }),
       );
