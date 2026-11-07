@@ -28,6 +28,9 @@ reacted with it, and a click on one adds or takes back yours. Close a room
 with the X in its header, like a private chat; it stays in the **Rooms** list, and a new message
 brings its button back.
 
+Torn's own faction chat gets an **Open faction** item in its title menu (the arrow beside the faction
+name), like the **View profile** item of a private chat: it opens your faction's page.
+
 Tag players with `@Name`: typing `@` lists the room's members (arrows and Enter or Tab to pick). A
 tagged player gets an **@ N mentions** pill in the room, Torn's blue "new messages" pill, that jumps to
 the oldest message tagging them they have not seen, and an @ beside the room's button and card. A

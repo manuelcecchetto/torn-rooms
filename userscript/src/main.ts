@@ -4,6 +4,7 @@ import extraCss from './extra.css';
 import { hasKey, logout, openEvents, session, storedSession } from './api';
 import { changed, handleEvent, setError, state, subscribe, syncChatStyle } from './store';
 import { Layout } from './ui/layout';
+import { watchFactionMenu } from './factionMenu';
 
 function waitForChat(): Promise<void> {
   return new Promise((resolve) => {
@@ -52,6 +53,7 @@ async function start(): Promise<void> {
 async function boot(): Promise<void> {
   document.documentElement.dataset.tornRooms = __VERSION__;
   await waitForChat();
+  watchFactionMenu(document.getElementById('chatRoot')!);
   // Follow the player's Torn chat styling, also when they change it in Torn's chat settings. Read only
   // while the Torn tab is actively viewed (visible and focused), like everything taken from the page.
   const syncIfActive = () => document.visibilityState === 'visible' && document.hasFocus() && syncChatStyle();
